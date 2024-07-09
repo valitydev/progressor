@@ -1,0 +1,17 @@
+{application, progressor,
+ [{description, "An OTP application"},
+  {vsn, "0.1.0"},
+  {registered, []},
+  {mod, {progressor_app, []}},
+  {applications,
+   [kernel,
+    stdlib,
+    jsx,
+    epg_connector
+   ]},
+  {env,[]},
+  {modules, []},
+
+  {licenses, ["MIT"]},
+  {links, []}
+ ]}.
