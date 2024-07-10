@@ -109,7 +109,7 @@
 -type task_result() :: #{
     task_id := task_id(),
     status := task_status(),
-    finish_time => timestamp_sec(),
+    finished_time => timestamp_sec(),
     response => binary()
 }.
 

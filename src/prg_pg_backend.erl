@@ -131,7 +131,6 @@ search_tasks(#{pool := Pool}, NsId, Timeout, Limit) ->
             )
         end
     ),
-    %io:format(user, "SEARCH: ~p~n", [Res]),
     to_maps(Columns, Rows, fun marshal_task/1).
 
 -spec create_process(pg_opts(), namespace_id(), process(), task()) -> {ok, task_id()} | {error, _Reason}.
@@ -398,6 +397,8 @@ do_save_task(Connection, Table, Task) ->
         last_retry_interval := LastRetryInterval,
         attempts_count := AttemptsCount
     } = Task,
+    %% TODO maybe check it
+    %% one process can have only one task with type init, one task with status = waiting | running | blocked
     Args = maps:get(args, Task, null),
     MetaData = maps:get(metadata, Task, null),
     IdempotencyKey = maps:get(idempotency_key, Task, null),
