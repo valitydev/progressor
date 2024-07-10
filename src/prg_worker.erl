@@ -164,6 +164,7 @@ handle_result(
             end
     end;
 
+%% success result with unset_timer or undefined action
 handle_result(
     {ok, #{events := Events} = Result},
     TaskHeader,

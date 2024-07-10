@@ -6,7 +6,8 @@
     process_id := id(),
     status := process_status(),
     detail => binary(),
-    metadata => binary(),
+    aux_state => binary(),
+    metadata => map(),
     history => [event()]
     %% timer => timestamp_sec()
 }.
