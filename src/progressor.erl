@@ -16,9 +16,9 @@
 %% Internal API
 -export([reply/2]).
 
--ifdef(TEST).
+%-ifdef(TEST).
 -export([cleanup/1]).
--endif.
+%-endif.
 
 -type request() :: #{
     ns := namespace_id(),
@@ -84,7 +84,7 @@ get(Req) ->
         fun do_get_request/1
     ], Req).
 
--ifdef(TEST).
+%-ifdef(TEST).
 
 -spec cleanup(_) -> _.
 cleanup(Opts) ->
@@ -96,7 +96,7 @@ cleanup(Opts) ->
 cleanup_storage(#{ns := NsId, ns_opts := #{storage := StorageOpts}}) ->
     ok = prg_storage:cleanup(StorageOpts, NsId).
 
--endif.
+%-endif.
 
 %% Internal functions
 
@@ -192,8 +192,8 @@ process_call(#{ns := NsId, ns_opts := NsOpts, type := Type, task := Task}) ->
     ok = prg_scheduler:push_task(NsId, TaskHeader, Task),
     %% see fun reply/2
     receive
-        {Ref, {error, {exception, _Class, Term}}} ->
-            error({{woody_error, {external, result_unexpected, prg_utils:format(Term)}}, []});
+        {Ref, {error, {exception, Class, Term}}} ->
+            erlang:raise(Class, {woody_error, {external, result_unexpected, prg_utils:format(Term)}}, []);
         {Ref, Result} ->
             Result
     after

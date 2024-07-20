@@ -23,9 +23,9 @@
 %% Init operations
 -export([db_init/2]).
 
--ifdef(TEST).
+%-ifdef(TEST).
 -export([cleanup/2]).
--endif.
+%-endif.
 
 -type pg_opts() :: #{pool := atom()}.
 
@@ -342,7 +342,7 @@ db_init(#{pool := Pool}, NsId) ->
         end),
     ok.
 
--ifdef(TEST).
+%-ifdef(TEST).
 
 -spec cleanup(_, _) -> _.
 cleanup(#{pool := Pool}, NsId) ->
@@ -352,14 +352,14 @@ cleanup(#{pool := Pool}, NsId) ->
     epgsql_pool:transaction(
         Pool,
         fun(Connection) ->
-            {ok, _, _} = epgsql_pool:query(Connection, "DROP TABLE " ++ TaskTable),
             {ok, _, _} = epgsql_pool:query(Connection, "DROP TABLE " ++ EventsTable),
+            {ok, _, _} = epgsql_pool:query(Connection, "DROP TABLE " ++ TaskTable),
             {ok, _, _} = epgsql_pool:query(Connection, "DROP TABLE " ++ ProcessesTable)
         end
     ),
     ok.
 
--endif.
+%-endif.
 
 %% Internal functions
 

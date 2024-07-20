@@ -23,9 +23,9 @@
 %% Init operations
 -export([db_init/2]).
 
--ifdef(TEST).
+%-ifdef(TEST).
 -export([cleanup/2]).
--endif.
+%-endif.
 
 %% Task management
 -spec get_task_result(storage_opts(), namespace_id(), binary()) -> {ok, binary()} | {error, _Reason}.
@@ -80,10 +80,10 @@ complete_and_unlock(#{client := prg_pg_backend, options := PgOpts}, NsId, TaskRe
 db_init(#{client := prg_pg_backend, options := PgOpts}, NsId) ->
     prg_pg_backend:db_init(PgOpts, NsId).
 
--ifdef(TEST).
+%-ifdef(TEST).
 
 -spec cleanup(_, _) -> _.
 cleanup(#{client := prg_pg_backend, options := PgOpts}, NsId) ->
     prg_pg_backend:cleanup(PgOpts, NsId).
 
--endif.
+%-endif.
