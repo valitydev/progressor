@@ -386,7 +386,7 @@ do_save_process(Connection, Table, Process) ->
     epgsql_pool:query(
         Connection,
         "INSERT INTO " ++ Table ++ " (process_id, status, detail, aux_state, metadata) VALUES ($1, $2, $3, $4, $5)",
-        [ProcessId, Status, Detail, AuxState, Meta]
+        [ProcessId, Status, Detail, AuxState, json_encode(Meta)]
     ).
 
 do_save_task(Connection, Table, Task) ->
@@ -452,7 +452,7 @@ do_save_event(Connection, EventsTable, ProcessId, TaskId, Event) ->
         Connection,
         "INSERT INTO " ++ EventsTable ++ " (process_id, task_id, event_id, timestamp, payload, metadata) "
         "VALUES ($1, $2, $3, $4, $5, $6)",
-        [ProcessId, TaskId, EventId, unixtime_to_datetime(EventTs), Payload, MetaData]
+        [ProcessId, TaskId, EventId, unixtime_to_datetime(EventTs), Payload, json_encode(MetaData)]
     ).
 
 do_complete_task(Connection, TaskTable, TaskResult) ->
