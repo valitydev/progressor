@@ -8,7 +8,7 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2,
     code_change/3]).
 
--export([process/4]).
+-export([process/5]).
 
 -define(SERVER, ?MODULE).
 
@@ -16,10 +16,10 @@
 
 %% API
 
-process(Pid, HandlerOpts, Request, Timeout) ->
+process(Pid, HandlerOpts, Request, Context, Timeout) ->
     %% let it crash if timeout. worker will be restarted by supervisor
     %% maybe try/catch ???
-    gen_server:call(Pid, {HandlerOpts, Request}, Timeout).
+    gen_server:call(Pid, {HandlerOpts, Request, Context}, Timeout).
 %    ReqId = gen_server:send_request(Pid, {HandlerOpts, Request}),
 %    case gen_server:wait_response(ReqId, Timeout) of
 %        timeout ->
@@ -38,9 +38,9 @@ start_link() ->
 init([]) ->
     {ok, #prg_processor_state{}}.
 
-handle_call({#{client := Handler, options := Options}, Request}, _From, State = #prg_processor_state{}) ->
+handle_call({#{client := Handler, options := Options}, Request, Ctx}, _From, State = #prg_processor_state{}) ->
     Response =
-        try Handler:process(Request, Options) of
+        try Handler:process(Request, Options, Ctx) of
             {ok, _Result} = OK -> OK;
             {error, _Reason} = ERR -> ERR;
             _Unsupported -> {error, <<"unsupported_result">>}

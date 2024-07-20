@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS default_tasks(
     "blocked_task" BIGINT REFERENCES default_tasks ("task_id"),
     "last_retry_interval" INTEGER NOT NULL,
     "attempts_count" SMALLINT NOT NULL,
+    "context" BYTEA,
     FOREIGN KEY ("process_id") REFERENCES default_processes ("process_id")
 );
 

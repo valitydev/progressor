@@ -101,8 +101,10 @@ do_process_task(TaskHeader, Task,
     }
 ) ->
     Args = maps:get(args, Task, <<>>),
+    Ctx = maps:get(context, Task, <<>>),
+    Request = {extract_task_type(TaskHeader), Args, Process},
     handle_result(
-        prg_processor:process(Pid, Processor, {extract_task_type(TaskHeader), Args, Process}, TimeoutSec * 1000),
+        prg_processor:process(Pid, Processor, Request, Ctx, TimeoutSec * 1000),
         TaskHeader,
         Task,
         State
@@ -112,7 +114,7 @@ do_process_task(TaskHeader, Task,
 handle_result(
     {ok, #{action := #{set_timer := Timestamp}, events := Events} = Result},
     TaskHeader,
-    #{task_id := TaskId} = Task,
+    #{task_id := TaskId, context := Context} = Task,
     State = #prg_worker_state{
         ns_id = NsId,
         ns_opts = #{storage := StorageOpts} = _NsOpts,
@@ -133,6 +135,7 @@ handle_result(
             process_id => ProcessId,
             task_type => <<"timeout">>,
             scheduled_time => Timestamp,
+            context => Context,
             last_retry_interval => 0,
             attempts_count => 0
         },

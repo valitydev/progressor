@@ -315,6 +315,7 @@ db_init(#{pool := Pool}, NsId) ->
                 "blocked_task BIGINT REFERENCES " ++ TaskTable ++ " (task_id), "
                 "last_retry_interval INTEGER NOT NULL, "
                 "attempts_count SMALLINT NOT NULL, "
+                "context BYTEA, "
                 "FOREIGN KEY (process_id) REFERENCES " ++ ProcessesTable ++ " (process_id))"
             ),
             %% create events table
@@ -405,15 +406,16 @@ do_save_task(Connection, Table, Task) ->
     BlockedTask = maps:get(blocked_task, Task, null),
     RunningTs = maps:get(running_time, Task, null),
     Response = maps:get(response, Task, null),
+    Context = maps:get(context, Task, <<>>),
     epgsql_pool:query(
         Connection,
         "INSERT INTO " ++ Table ++ " "
         "  (process_id, task_type, status, scheduled_time, running_time, args, "
-        "   metadata, idempotency_key, blocked_task, response, last_retry_interval, attempts_count)"
-        "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING task_id",
+        "   metadata, idempotency_key, blocked_task, response, last_retry_interval, attempts_count, context)"
+        "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING task_id",
         [
             ProcessId, TaskType, Status, unixtime_to_datetime(ScheduledTs), unixtime_to_datetime(RunningTs), Args,
-            json_encode(MetaData), IdempotencyKey, BlockedTask, Response, LastRetryInterval, AttemptsCount
+            json_encode(MetaData), IdempotencyKey, BlockedTask, Response, LastRetryInterval, AttemptsCount, Context
         ]
     ).
 
@@ -577,6 +579,7 @@ marshal_task(Task) ->
         (<<"blocked_task">>, BlockedTaskId, Acc) -> Acc#{blocked_task => BlockedTaskId};
         (<<"last_retry_interval">>, LastRetryInterval, Acc) -> Acc#{last_retry_interval => LastRetryInterval};
         (<<"attempts_count">>, AttemptsCount, Acc) -> Acc#{attempts_count => AttemptsCount};
+        (<<"context">>, Context, Acc) -> Acc#{context => Context};
         (_, _, Acc) -> Acc
     end, #{}, Task).
 

@@ -24,7 +24,8 @@
     ns := namespace_id(),
     id := id(),
     args => term(),
-    idempotency_key => binary()
+    idempotency_key => binary(),
+    context => binary()
 }.
 
 %% see receive blocks bellow in this module
@@ -117,10 +118,12 @@ check_idempotency(Req) ->
     Req.
 
 add_task(#{id := Id, args := Args, type := Type} = Opts) ->
+    Context = maps:get(context, Opts, <<>>),
     TaskData = #{
         process_id => Id,
         args => Args,
-        task_type => convert_task_type(Type)
+        task_type => convert_task_type(Type),
+        context => Context
     },
     Task = make_task(maybe_add_idempotency(TaskData, maps:get(idempotency_key, Opts, undefined))),
     Opts#{task => Task}.
