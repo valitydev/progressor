@@ -40,7 +40,7 @@ init(Req) ->
         fun add_ns_opts/1,
         fun check_idempotency/1,
         fun add_task/1,
-        fun create_process/1,
+        fun prepare_init/1,
         fun process_call/1
     ], Req#{type => init}).
 
@@ -128,8 +128,8 @@ add_task(#{id := Id, args := Args, type := Type} = Opts) ->
     Task = make_task(maybe_add_idempotency(TaskData, maps:get(idempotency_key, Opts, undefined))),
     Opts#{task => Task}.
 
-create_process(#{ns_opts := #{storage := StorageOpts}, ns := NsId, task := #{process_id := ProcessId} = InitTask} = Req) ->
-    case prg_storage:create_process(StorageOpts, NsId, new_process(ProcessId), InitTask) of
+prepare_init(#{ns_opts := #{storage := StorageOpts}, ns := NsId, task := #{process_id := ProcessId} = InitTask} = Req) ->
+    case prg_storage:prepare_init(StorageOpts, NsId, new_process(ProcessId), InitTask) of
         {ok, TaskId} ->
             Req#{task => InitTask#{task_id => TaskId}};
         {error, _Reason} = Error ->
@@ -143,11 +143,19 @@ check_process_status(#{ns_opts := #{storage := StorageOpts}, id := Id, ns := NsI
         {error, _} = Error -> Error
     end.
 
-prepare_call(#{ns_opts := #{storage := StorageOpts}, ns := NsId, id := ProcessId, task := Task} = Req) ->
-    %% if exists task.status=/=running then block waiting task, save new task as running
+prepare_call(#{ns_opts := #{storage := StorageOpts} = NsOpts, ns := NsId, id := ProcessId, task := Task} = Req) ->
     case prg_storage:prepare_call(StorageOpts, NsId, ProcessId, Task) of
-        {ok, TaskId} ->
+        {ok, {continue, TaskId}} ->
             Req#{task => Task#{task_id => TaskId}};
+        {ok, {postpone, TaskId}} ->
+            TimeoutSec = maps:get(process_step_timeout, NsOpts, ?DEFAULT_STEP_TIMEOUT_SEC),
+            Timeout = TimeoutSec * 1000,
+            case await_task_result(StorageOpts, NsId, {task_id, TaskId}, Timeout, 0) of
+                {ok, _Result} = OK ->
+                    {break, OK};
+                {error, _Reason} = ERR ->
+                    ERR
+            end;
         {error, _} = Error ->
             Error
     end.
@@ -157,7 +165,7 @@ save_task(#{ns_opts := #{storage := StorageOpts}, ns := NsId, task := Task} = Op
     Opts#{task => Task#{task_id => TaskId}}.
 
 get_task_result(#{ns_opts := #{storage := StorageOpts} = NsOpts, ns := NsId, idempotency_key := IdempotencyKey}) ->
-    case prg_storage:get_task_result(StorageOpts, NsId, IdempotencyKey) of
+    case prg_storage:get_task_result(StorageOpts, NsId, {idempotency_key, IdempotencyKey}) of
         {ok, Result} ->
             Result;
         {error, not_found} ->
@@ -165,18 +173,18 @@ get_task_result(#{ns_opts := #{storage := StorageOpts} = NsOpts, ns := NsId, ide
         {error, in_progress} ->
             TimeoutSec = maps:get(process_step_timeout, NsOpts, ?DEFAULT_STEP_TIMEOUT_SEC),
             Timeout = TimeoutSec * 1000,
-            await_task_result(StorageOpts, NsId, IdempotencyKey, Timeout, 0)
+            await_task_result(StorageOpts, NsId, {idempotency_key, IdempotencyKey}, Timeout, 0)
     end.
 
-await_task_result(_StorageOpts, _NsId, _IdempotencyKey, Timeout, Duration) when Duration > Timeout ->
+await_task_result(_StorageOpts, _NsId, _KeyOrId, Timeout, Duration) when Duration > Timeout ->
     {error, <<"timeout">>};
-await_task_result(StorageOpts, NsId, IdempotencyKey, Timeout, Duration) ->
-    case prg_storage:get_task_result(StorageOpts, NsId, IdempotencyKey) of
+await_task_result(StorageOpts, NsId, KeyOrId, Timeout, Duration) ->
+    case prg_storage:get_task_result(StorageOpts, NsId, KeyOrId) of
         {ok, Result} ->
-            Result;
+            {ok, Result};
         {error, in_progress} ->
             timer:sleep(?TASK_REPEAT_REQUEST_TIMEOUT),
-            await_task_result(StorageOpts, NsId, IdempotencyKey, Timeout, Duration + ?TASK_REPEAT_REQUEST_TIMEOUT)
+            await_task_result(StorageOpts, NsId, KeyOrId, Timeout, Duration + ?TASK_REPEAT_REQUEST_TIMEOUT)
     end.
 
 do_get_request(#{ns_opts := #{storage := StorageOpts}, id := Id, ns := NsId, args := HistoryRange}) ->

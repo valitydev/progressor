@@ -7,6 +7,7 @@
 %% Task management
 -export([get_task_result/3]).
 -export([save_task/3]).
+-export([search_postponed_calls/3]).
 
 %% Process management
 -export([get_process_status/3]).
@@ -14,7 +15,7 @@
 
 %% Complex operations
 -export([search_tasks/4]).
--export([create_process/4]).
+-export([prepare_init/4]).
 -export([prepare_call/4]).
 -export([complete_and_continue/6]).
 -export([complete_and_suspend/5]).
@@ -34,10 +35,11 @@
 
 
 %% Task management
--spec get_task_result(pg_opts(), namespace_id(), binary()) -> {ok, binary()} | {error, _Reason}.
-get_task_result(#{pool := Pool}, NsId, IdempotencyKey) ->
+-spec get_task_result(pg_opts(), namespace_id(), {task_id | idempotency_key, binary()}) ->
+    {ok, binary()} | {error, _Reason}.
+get_task_result(#{pool := Pool}, NsId, KeyOrId) ->
     TaskTable = construct_table_name(NsId, "_tasks"),
-    case do_get_task_result(Pool, TaskTable, IdempotencyKey) of
+    case do_get_task_result(Pool, TaskTable, KeyOrId) of
         {ok, _, []} ->
             {error, not_found};
         {ok, _, [{null}]} ->
@@ -51,6 +53,22 @@ save_task(#{pool := Pool}, NsId, Task) ->
     Table = construct_table_name(NsId, "_tasks"),
     {ok, _, _, [{TaskId}]} = do_save_task(Pool, Table, Task),
     {ok, TaskId}.
+
+-spec search_postponed_calls(pg_opts(), namespace_id(), id()) -> {ok, task()} | {error, not_found}.
+search_postponed_calls(#{pool := Pool}, NsId, Id) ->
+    TaskTable = construct_table_name(NsId, "_tasks"),
+    {ok, Columns, Rows} = epgsql_pool:query(
+        Pool,
+        "SELECT * FROM " ++ TaskTable ++ " WHERE process_id = $1 AND task_type = 'call' AND status = 'running'",
+        [Id]
+    ),
+    case Rows of
+        [] ->
+            {error, not_found};
+        [_Row] ->
+            [CallTask] = to_maps(Columns, Rows, fun marshal_task/1),
+            {ok, CallTask}
+    end.
 
 %% Process management
 -spec get_process_status(pg_opts(), namespace_id(), id()) -> term().
@@ -75,7 +93,7 @@ get_process(#{pool := Pool}, NsId, ProcessId, HistoryRange) ->
     {ok, Columns, Rows} = epgsql_pool:query(
         Pool,
         "SELECT "
-        "  pr.process_id, pr.status, pr.detail, pr.metadata, ev.event_id, ev.timestamp, ev.metadata, ev.payload "
+        "  pr.process_id, pr.status, pr.detail, pr.aux_state, ev.event_id, ev.timestamp, ev.metadata, ev.payload "
         "FROM "
         "  (SELECT * FROM " ++ ProcessesTable ++ " WHERE process_id = $1) AS pr "
         "   LEFT JOIN (SELECT * FROM " ++ EventsTable ++ RangeCondition ++ " ORDER BY event_id ASC) AS ev "
@@ -133,8 +151,8 @@ search_tasks(#{pool := Pool}, NsId, Timeout, Limit) ->
     ),
     to_maps(Columns, Rows, fun marshal_task/1).
 
--spec create_process(pg_opts(), namespace_id(), process(), task()) -> {ok, task_id()} | {error, _Reason}.
-create_process(#{pool := Pool}, NsId, Process, InitTask) ->
+-spec prepare_init(pg_opts(), namespace_id(), process(), task()) -> {ok, task_id()} | {error, _Reason}.
+prepare_init(#{pool := Pool}, NsId, Process, InitTask) ->
     ProcessesTable = construct_table_name(NsId, "_processes"),
     TaskTable = construct_table_name(NsId, "_tasks"),
     epgsql_pool:transaction(
@@ -150,9 +168,9 @@ create_process(#{pool := Pool}, NsId, Process, InitTask) ->
         end
     ).
 
--spec prepare_call(pg_opts(), namespace_id(), id(), task()) -> {ok, task_id()} | {error, _Error}.
+-spec prepare_call(pg_opts(), namespace_id(), id(), task()) ->
+    {ok, {postpone, task_id()} | {continue, task_id()}} | {error, _Error}.
 prepare_call(#{pool := Pool}, NsId, ProcessId, Task) ->
-    %% if exists task.status=/=running then block waiting task, save new task as running else error
     TaskTable = construct_table_name(NsId, "_tasks"),
     %% TODO optimize request
     epgsql_pool:transaction(
@@ -160,11 +178,12 @@ prepare_call(#{pool := Pool}, NsId, ProcessId, Task) ->
         fun(Connection) ->
             case is_process_busy(Connection, TaskTable, ProcessId) of
                 true ->
-                    {error, <<"process is busy">>};
+                    {ok, _, _, [{TaskId}]} = do_save_task(Connection, TaskTable, Task),
+                    {ok, {postpone, TaskId}};
                 false ->
                     {ok, BlockedTaskId} = maybe_block_task(Connection, TaskTable, ProcessId),
                     {ok, _, _, [{TaskId}]} = do_save_task(Connection, TaskTable, Task#{blocked_task => BlockedTaskId}),
-                    {ok, TaskId}
+                    {ok, {continue, TaskId}}
             end
         end
     ).
@@ -419,11 +438,17 @@ do_save_task(Connection, Table, Task) ->
         ]
     ).
 
-do_get_task_result(Connection, Table, IdempotencyKey) ->
+do_get_task_result(Connection, Table, {idempotency_key, IdempotencyKey}) ->
     epgsql_pool:query(
         Connection,
         "SELECT response FROM " ++ Table ++ " WHERE idempotency_key = $1",
         [IdempotencyKey]
+    );
+do_get_task_result(Connection, Table, {task_id, TaskId}) ->
+    epgsql_pool:query(
+        Connection,
+        "SELECT response FROM " ++ Table ++ " WHERE task_id = $1",
+        [TaskId]
     ).
 
 do_update_process(Connection, ProcessesTable, Process) ->

@@ -141,29 +141,40 @@ handle_result(
         },
         maps:with([metadata], Task)
     ),
-    case operation(Timestamp, Now) of
-        postpone ->
-            %% save waiting task and go to next task
+    case prg_storage:search_postponed_calls(StorageOpts, NsId, ProcessId) of
+        {ok, CallTask} ->
+            %% save new task as blocked and process call
             {ok, _} = prg_storage:complete_and_continue(StorageOpts, NsId, TaskResult, ProcessUpdated, Events,
-                NewTask#{status => <<"waiting">>}),
+                NewTask#{status => <<"blocked">>}),
             _ = maybe_reply(TaskHeader, Response),
-            ok = next_task(self()),
-            State#prg_worker_state{process = undefined};
-        continuation ->
-            %% save running task and try continuation
-            NextTask0 = NewTask#{status => <<"running">>, running_time => Timestamp},
-            {ok, NextTaskId} = prg_storage:complete_and_continue(StorageOpts, NsId, TaskResult, ProcessUpdated, Events,
-                NextTask0),
-            NextTask = NextTask0#{task_id => NextTaskId},
-            _ = maybe_reply(TaskHeader, Response),
-            case prg_scheduler:continuation_task(NsId, self(), NextTask) of
-                ok ->
-                    NewHistory = maps:get(history, Process) ++ Events,
-                    ok = continuation_task(self(), NextTask),
-                    State#prg_worker_state{process = ProcessUpdated#{history => NewHistory}};
-                {OtherTaskHeader, OtherTask} ->
-                    ok = process_task(self(), OtherTaskHeader, OtherTask),
-                    State#prg_worker_state{process = undefined}
+            NewHistory = maps:get(history, Process) ++ Events,
+            ok = continuation_task(self(), CallTask),
+            State#prg_worker_state{process = ProcessUpdated#{history => NewHistory}};
+        {error, not_found} ->
+            case operation(Timestamp, Now) of
+                postpone ->
+                    %% save new task as waiting and go to next task
+                    {ok, _} = prg_storage:complete_and_continue(StorageOpts, NsId, TaskResult, ProcessUpdated, Events,
+                        NewTask#{status => <<"waiting">>}),
+                    _ = maybe_reply(TaskHeader, Response),
+                    ok = next_task(self()),
+                    State#prg_worker_state{process = undefined};
+                continuation ->
+                    %% save new task as running and try continuation
+                    NextTask0 = NewTask#{status => <<"running">>, running_time => Timestamp},
+                    {ok, NextTaskId} = prg_storage:complete_and_continue(StorageOpts, NsId, TaskResult, ProcessUpdated,
+                        Events, NextTask0),
+                    _ = maybe_reply(TaskHeader, Response),
+                    NextTask = NextTask0#{task_id => NextTaskId},
+                    case prg_scheduler:continuation_task(NsId, self(), NextTask) of
+                        ok ->
+                            NewHistory = maps:get(history, Process) ++ Events,
+                            ok = continuation_task(self(), NextTask),
+                            State#prg_worker_state{process = ProcessUpdated#{history => NewHistory}};
+                        {OtherTaskHeader, OtherTask} ->
+                            ok = process_task(self(), OtherTaskHeader, OtherTask),
+                            State#prg_worker_state{process = undefined}
+                    end
             end
     end;
 

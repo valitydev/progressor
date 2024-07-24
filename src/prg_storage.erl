@@ -6,6 +6,7 @@
 -export([get_task_result/3]).
 -export([search_tasks/4]).
 -export([save_task/3]).
+-export([search_postponed_calls/3]).
 
 %% Process management
 -export([get_process_status/3]).
@@ -13,7 +14,7 @@
 -export([get_process/4]).
 
 %% Complex operations
--export([create_process/4]).
+-export([prepare_init/4]).
 -export([prepare_call/4]).
 %% TODO must be retryable
 -export([complete_and_continue/6]).
@@ -28,13 +29,18 @@
 %-endif.
 
 %% Task management
--spec get_task_result(storage_opts(), namespace_id(), binary()) -> {ok, binary()} | {error, _Reason}.
-get_task_result(#{client := prg_pg_backend, options := PgOpts}, NsId, IdempotencyKey) ->
-    prg_pg_backend:get_task_result(PgOpts, NsId, IdempotencyKey).
+-spec get_task_result(storage_opts(), namespace_id(), {task_id | idempotency_key, binary()}) ->
+    {ok, binary()} | {error, _Reason}.
+get_task_result(#{client := prg_pg_backend, options := PgOpts}, NsId, KeyOrId) ->
+    prg_pg_backend:get_task_result(PgOpts, NsId, KeyOrId).
 
 -spec save_task(storage_opts(), namespace_id(), task()) -> {ok, task_id()}.
 save_task(#{client := prg_pg_backend, options := PgOpts}, NsId, Task) ->
     prg_pg_backend:save_task(PgOpts, NsId, Task).
+
+-spec search_postponed_calls(storage_opts(), namespace_id(), id()) -> {ok, task()} | {error, not_found}.
+search_postponed_calls(#{client := prg_pg_backend, options := PgOpts}, NsId, Id) ->
+    prg_pg_backend:search_postponed_calls(PgOpts, NsId, Id).
 
 %% Process management
 -spec get_process_status(storage_opts(), namespace_id(), id()) -> {ok, _Result} | {error, _Reason}.
@@ -54,11 +60,12 @@ get_process(#{client := prg_pg_backend, options := PgOpts}, NsId, ProcessId, His
 search_tasks(#{client := prg_pg_backend, options := PgOpts}, NsId, Timeout, Limit) ->
     prg_pg_backend:search_tasks(PgOpts, NsId, Timeout, Limit).
 
--spec create_process(storage_opts(), namespace_id(), process(), task()) -> {ok, task_id()} | {error, _Reason}.
-create_process(#{client := prg_pg_backend, options := PgOpts}, NsId, Process, InitTask) ->
-    prg_pg_backend:create_process(PgOpts, NsId, Process, InitTask).
+-spec prepare_init(storage_opts(), namespace_id(), process(), task()) -> {ok, task_id()} | {error, _Reason}.
+prepare_init(#{client := prg_pg_backend, options := PgOpts}, NsId, Process, InitTask) ->
+    prg_pg_backend:prepare_init(PgOpts, NsId, Process, InitTask).
 
--spec prepare_call(storage_opts(), namespace_id(), id(), task()) -> {ok, task_id()} | {error, _Error}.
+-spec prepare_call(storage_opts(), namespace_id(), id(), task()) ->
+    {ok, {postpone, task_id()} | {continue, task_id()}} | {error, _Error}.
 prepare_call(#{client := prg_pg_backend, options := PgOpts}, NsId, ProcessId, Task) ->
     prg_pg_backend:prepare_call(PgOpts, NsId, ProcessId, Task).
 

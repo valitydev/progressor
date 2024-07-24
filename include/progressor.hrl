@@ -25,7 +25,8 @@
     response => binary(),
     blocked_task => task_id(),
     last_retry_interval => non_neg_integer(),
-    attempts_count => non_neg_integer()
+    attempts_count => non_neg_integer(),
+    context => binary()
 }.
 
 -type event() :: #{

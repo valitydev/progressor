@@ -43,9 +43,9 @@ start_link({NsId, _NsOpts} = NS) ->
     RegName = prg_utils:registered_name(NsId, "_scheduler"),
     gen_server:start_link({local, RegName}, ?MODULE, NS, []).
 
-init({NsId, #{process_step_timeout := StepTimeoutSec} = Opts}) ->
+init({NsId, #{task_scan_timeout := RescanTimeoutSec} = Opts}) ->
     _ = start_workers(NsId, Opts),
-    RescanTimeoutMs = StepTimeoutSec  * 500, %% 1/2 step timeout in milliseconds
+    RescanTimeoutMs = RescanTimeoutSec  * 1000,
     State = #prg_scheduler_state{
         ns_id = NsId,
         ns_opts = Opts,
