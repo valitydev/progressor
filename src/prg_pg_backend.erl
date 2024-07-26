@@ -12,13 +12,16 @@
 %% Process management
 -export([get_process_status/3]).
 -export([get_process/4]).
+-export([remove_process/3]).
 
 %% Complex operations
 -export([search_tasks/4]).
 -export([prepare_init/4]).
 -export([prepare_call/4]).
+-export([prepare_repair/4]).
 -export([complete_and_continue/6]).
 -export([complete_and_suspend/5]).
+-export([complete_and_error/4]).
 -export([complete_and_unlock/5]).
 
 %% Init operations
@@ -36,7 +39,7 @@
 
 %% Task management
 -spec get_task_result(pg_opts(), namespace_id(), {task_id | idempotency_key, binary()}) ->
-    {ok, binary()} | {error, _Reason}.
+    {ok, term()} | {error, _Reason}.
 get_task_result(#{pool := Pool}, NsId, KeyOrId) ->
     TaskTable = construct_table_name(NsId, "_tasks"),
     case do_get_task_result(Pool, TaskTable, KeyOrId) of
@@ -45,7 +48,7 @@ get_task_result(#{pool := Pool}, NsId, KeyOrId) ->
         {ok, _, [{null}]} ->
             {error, in_progress};
         {ok, _, [{Value}]} ->
-            {ok, Value}
+            {ok, binary_to_term(Value)}
     end.
 
 -spec save_task(pg_opts(), namespace_id(), task()) -> {ok, task_id()}.
@@ -57,10 +60,15 @@ save_task(#{pool := Pool}, NsId, Task) ->
 -spec search_postponed_calls(pg_opts(), namespace_id(), id()) -> {ok, task()} | {error, not_found}.
 search_postponed_calls(#{pool := Pool}, NsId, Id) ->
     TaskTable = construct_table_name(NsId, "_tasks"),
-    {ok, Columns, Rows} = epgsql_pool:query(
+    NowSec = erlang:system_time(second),
+    Now = unixtime_to_datetime(NowSec),
+    {ok, _, Columns, Rows} = epgsql_pool:query(
         Pool,
-        "SELECT * FROM " ++ TaskTable ++ " WHERE process_id = $1 AND task_type = 'call' AND status = 'running'",
-        [Id]
+        "UPDATE " ++ TaskTable ++ " SET status = 'running', running_time = $2 WHERE task_id IN "
+        "(SELECT task_id FROM " ++ TaskTable ++ " WHERE "
+        "  (process_id = $1 AND status = 'waiting' AND task_type = 'call') "
+        "ORDER BY scheduled_time ASC LIMIT 1) RETURNING *",
+        [Id, Now]
     ),
     case Rows of
         [] ->
@@ -112,6 +120,21 @@ get_process(#{pool := Pool}, NsId, ProcessId, HistoryRange) ->
             {ok, Proc#{history => Events}}
     end.
 
+-spec remove_process(pg_opts(), namespace_id(), id()) -> ok | no_return().
+remove_process(#{pool := Pool}, NsId, ProcessId) ->
+    TaskTable = construct_table_name(NsId, "_tasks"),
+    EventsTable = construct_table_name(NsId, "_events"),
+    ProcessesTable = construct_table_name(NsId, "_processes"),
+    epgsql_pool:transaction(
+        Pool,
+        fun(Connection) ->
+            {ok, _E} = epgsql_pool:query(Connection, "DELETE FROM " ++ EventsTable ++ " WHERE process_id = $1", [ProcessId]),
+            {ok, _T} = epgsql_pool:query(Connection, "DELETE FROM " ++ TaskTable ++ " WHERE process_id = $1", [ProcessId]),
+            {ok, _P} = epgsql_pool:query(Connection, "DELETE FROM " ++ ProcessesTable ++ " WHERE process_id = $1", [ProcessId])
+        end
+    ),
+    ok.
+
 %% Complex operations
 -spec search_tasks(pg_opts(), namespace_id(), timeout_sec(), pos_integer()) -> [task()].
 search_tasks(#{pool := Pool}, NsId, Timeout, Limit) ->
@@ -129,7 +152,7 @@ search_tasks(#{pool := Pool}, NsId, Timeout, Limit) ->
                 Connection,
                 "WITH task_update as ("
                 "  UPDATE " ++ TaskTable ++ " SET status = 'error'"
-                "    WHERE running_time < $1 AND status = 'running' AND task_type != 'timeout' "
+                "    WHERE running_time < $1 AND status = 'running' AND task_type IN ('init', 'call', 'notify', 'repair')"
                 "    RETURNING process_id"
                 ") "
                 "UPDATE " ++ ProcessesTable ++ " SET status = 'error' "
@@ -141,9 +164,9 @@ search_tasks(#{pool := Pool}, NsId, Timeout, Limit) ->
                 "UPDATE " ++ TaskTable ++ " SET status = 'running', running_time = $1 WHERE task_id IN "
                 "(SELECT task_id FROM " ++ TaskTable ++ " WHERE "
                 %% condition for normal scheduled timeout tasks
-                "  (status = 'waiting' AND scheduled_time <= $1 AND task_type = 'timeout') "
+                "  (status = 'waiting' AND scheduled_time <= $1 AND task_type IN ('timeout', 'remove')) "
                 %% condition for zombie timeout tasks
-                "  OR (status = 'running' AND running_time < $2 AND task_type = 'timeout') "
+                "  OR (status = 'running' AND running_time < $2 AND task_type IN ('timeout', 'remove')) "
                 "ORDER BY scheduled_time ASC LIMIT $3) RETURNING *",
                 [Now, TsBackward, Limit]
             )
@@ -178,13 +201,25 @@ prepare_call(#{pool := Pool}, NsId, ProcessId, Task) ->
         fun(Connection) ->
             case is_process_busy(Connection, TaskTable, ProcessId) of
                 true ->
-                    {ok, _, _, [{TaskId}]} = do_save_task(Connection, TaskTable, Task),
+                    {ok, _, _, [{TaskId}]} = do_save_task(Connection, TaskTable, Task#{status => <<"waiting">>}),
                     {ok, {postpone, TaskId}};
                 false ->
                     {ok, BlockedTaskId} = maybe_block_task(Connection, TaskTable, ProcessId),
                     {ok, _, _, [{TaskId}]} = do_save_task(Connection, TaskTable, Task#{blocked_task => BlockedTaskId}),
                     {ok, {continue, TaskId}}
             end
+        end
+    ).
+
+-spec prepare_repair(pg_opts(), namespace_id(), id(), task()) -> {ok, task_id()} | {error, _Reason}.
+prepare_repair(#{pool := Pool}, NsId, ProcessId, RepairTask) ->
+    TaskTable = construct_table_name(NsId, "_tasks"),
+    epgsql_pool:transaction(
+        Pool,
+        fun(Connection) ->
+            {ok, BlockedTaskId} = maybe_block_error_task(Connection, TaskTable, ProcessId),
+            {ok, _, _, [{TaskId}]} = do_save_task(Connection, TaskTable, RepairTask#{blocked_task => BlockedTaskId}),
+            {ok, TaskId}
         end
     ).
 
@@ -229,6 +264,22 @@ complete_and_suspend(#{pool := Pool}, NsId, TaskResult, Process, Events) ->
             end, Events),
             {ok, _} = do_complete_task(Connection, TaskTable, TaskResult),
             {ok, _} = do_cancel_tasks(Connection, TaskTable, ProcessId),
+            ok
+        end
+    ).
+
+-spec complete_and_error(pg_opts(), namespace_id(), task_result(), process()) -> ok.
+complete_and_error(#{pool := Pool}, NsId, TaskResult, Process) ->
+    ProcessesTable = construct_table_name(NsId, "_processes"),
+    TaskTable = construct_table_name(NsId, "_tasks"),
+    #{process_id := ProcessId} = Process,
+    %% TODO optimize request
+    epgsql_pool:transaction(
+        Pool,
+        fun(Connection) ->
+            {ok, _} = do_update_process(Connection, ProcessesTable, Process),
+            {ok, _} = do_complete_task(Connection, TaskTable, TaskResult),
+            {ok, _} = do_block_tasks(Connection, TaskTable, ProcessId),
             ok
         end
     ).
@@ -303,7 +354,7 @@ db_init(#{pool := Pool}, NsId) ->
                 false ->
                     {ok, _, _} = epgsql_pool:query(
                         Connection,
-                        "CREATE TYPE task_type AS ENUM ('init', 'timeout', 'call', 'notify', 'repair')"
+                        "CREATE TYPE task_type AS ENUM ('init', 'timeout', 'call', 'notify', 'repair', 'remove')"
                     )
             end,
             %% create processes table
@@ -376,6 +427,7 @@ cleanup(#{pool := Pool}, NsId) ->
             {ok, _, _} = epgsql_pool:query(Connection, "DROP TABLE " ++ ProcessesTable)
         end
     ),
+    _ = epgsql_pool:query(Pool, "DROP TYPE task_type, task_status, process_status"),
     ok.
 
 %-endif.
@@ -417,8 +469,6 @@ do_save_task(Connection, Table, Task) ->
         last_retry_interval := LastRetryInterval,
         attempts_count := AttemptsCount
     } = Task,
-    %% TODO maybe check it
-    %% one process can have only one task with type init, one task with status = waiting | running | blocked
     Args = maps:get(args, Task, null),
     MetaData = maps:get(metadata, Task, null),
     IdempotencyKey = maps:get(idempotency_key, Task, null),
@@ -498,7 +548,15 @@ do_cancel_tasks(Connection, TaskTable, ProcessId) ->
     epgsql_pool:query(
         Connection,
         "UPDATE " ++ TaskTable ++ " SET status = 'cancelled' "
-        "WHERE process_id = $1 AND (status = 'waiting' OR status = 'blocked')",
+        "WHERE process_id = $1 AND task_type IN ('timeout', 'remove') AND (status = 'waiting' OR status = 'blocked')",
+        [ProcessId]
+    ).
+
+do_block_tasks(Connection, TaskTable, ProcessId) ->
+    epgsql_pool:query(
+        Connection,
+        "UPDATE " ++ TaskTable ++ " SET status = 'blocked' "
+        "WHERE process_id = $1 AND task_type IN ('timeout', 'remove') AND (status = 'waiting' OR status = 'blocked')",
         [ProcessId]
     ).
 
@@ -525,6 +583,20 @@ maybe_block_task(Connection, TaskTable, ProcessId) ->
     {ok, _, _Columns, Rows} = epgsql_pool:query(
         Connection,
         "UPDATE " ++ TaskTable ++ " SET status = 'blocked' WHERE process_id = $1 AND status = 'waiting' "
+        "RETURNING task_id",
+        [ProcessId]
+    ),
+    case Rows of
+        [] -> {ok, null};
+        [{TaskId}] -> {ok, TaskId}
+    end.
+
+maybe_block_error_task(Connection, TaskTable, ProcessId) ->
+    {ok, _, _Columns, Rows} = epgsql_pool:query(
+        Connection,
+        "UPDATE " ++ TaskTable ++ " SET status = 'blocked' WHERE task_id IN "
+        "  (SELECT task_id FROM " ++ TaskTable ++ " WHERE process_id = $1 AND status = 'error' "
+        "   ORDER BY task_id DESC LIMIT 1) "
         "RETURNING task_id",
         [ProcessId]
     ),

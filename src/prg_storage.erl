@@ -12,14 +12,17 @@
 -export([get_process_status/3]).
 -export([get_process/3]).
 -export([get_process/4]).
+-export([remove_process/3]).
 
 %% Complex operations
 -export([prepare_init/4]).
 -export([prepare_call/4]).
+-export([prepare_repair/4]).
 %% TODO must be retryable
 -export([complete_and_continue/6]).
 -export([complete_and_suspend/5]).
 -export([complete_and_unlock/5]).
+-export([complete_and_error/4]).
 
 %% Init operations
 -export([db_init/2]).
@@ -30,7 +33,7 @@
 
 %% Task management
 -spec get_task_result(storage_opts(), namespace_id(), {task_id | idempotency_key, binary()}) ->
-    {ok, binary()} | {error, _Reason}.
+    {ok, term()} | {error, _Reason}.
 get_task_result(#{client := prg_pg_backend, options := PgOpts}, NsId, KeyOrId) ->
     prg_pg_backend:get_task_result(PgOpts, NsId, KeyOrId).
 
@@ -55,6 +58,10 @@ get_process(StorageOpts, NsId, ProcessId) ->
 get_process(#{client := prg_pg_backend, options := PgOpts}, NsId, ProcessId, HistoryRange) ->
     prg_pg_backend:get_process(PgOpts, NsId, ProcessId, HistoryRange).
 
+-spec remove_process(storage_opts(), namespace_id(), id()) -> ok | no_return().
+remove_process(#{client := prg_pg_backend, options := PgOpts}, NsId, ProcessId) ->
+    prg_pg_backend:remove_process(PgOpts, NsId, ProcessId).
+
 %% Complex operations
 -spec search_tasks(storage_opts(), namespace_id(), timeout_sec(), pos_integer()) -> [task()].
 search_tasks(#{client := prg_pg_backend, options := PgOpts}, NsId, Timeout, Limit) ->
@@ -69,6 +76,10 @@ prepare_init(#{client := prg_pg_backend, options := PgOpts}, NsId, Process, Init
 prepare_call(#{client := prg_pg_backend, options := PgOpts}, NsId, ProcessId, Task) ->
     prg_pg_backend:prepare_call(PgOpts, NsId, ProcessId, Task).
 
+-spec prepare_repair(storage_opts(), namespace_id(), id(), task()) -> {ok, task_id()} | {error, _Reason}.
+prepare_repair(#{client := prg_pg_backend, options := PgOpts}, NsId, ProcessId, RepairTask) ->
+    prg_pg_backend:prepare_repair(PgOpts, NsId, ProcessId, RepairTask).
+
 -spec complete_and_continue(storage_opts(), namespace_id(), task_result(), process(), [event()], task()) ->
     {ok, task_id()}.
 complete_and_continue(#{client := prg_pg_backend, options := PgOpts}, NsId, TaskResult, Process, Events, NextTask) ->
@@ -77,6 +88,10 @@ complete_and_continue(#{client := prg_pg_backend, options := PgOpts}, NsId, Task
 -spec complete_and_suspend(storage_opts(), namespace_id(), task_result(), process(), [event()]) -> ok.
 complete_and_suspend(#{client := prg_pg_backend, options := PgOpts}, NsId, TaskResult, Process, Events) ->
     prg_pg_backend:complete_and_suspend(PgOpts, NsId, TaskResult, Process, Events).
+
+-spec complete_and_error(storage_opts(), namespace_id(), task_result(), process()) -> ok.
+complete_and_error(#{client := prg_pg_backend, options := PgOpts}, NsId, TaskResult, Process) ->
+    prg_pg_backend:complete_and_error(PgOpts, NsId, TaskResult, Process).
 
 -spec complete_and_unlock(storage_opts(), namespace_id(), task_result(), process(), [event()]) -> ok.
 complete_and_unlock(#{client := prg_pg_backend, options := PgOpts}, NsId, TaskResult, Process, Events) ->

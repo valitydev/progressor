@@ -2,7 +2,7 @@
 
 -include("progressor.hrl").
 
--define(TASK_REPEAT_REQUEST_TIMEOUT, 5000).
+-define(TASK_REPEAT_REQUEST_TIMEOUT, 1000).
 
 %% Public API
 -export([init/1]).
@@ -73,7 +73,7 @@ repair(Req) ->
         fun check_idempotency/1,
         fun(Opts) -> check_process_status(Opts, <<"error">>) end,
         fun add_task/1,
-        fun save_task/1,
+        fun prepare_repair/1,
         fun process_call/1
     ], Req#{type => repair}).
 
@@ -160,8 +160,8 @@ prepare_call(#{ns_opts := #{storage := StorageOpts} = NsOpts, ns := NsId, id := 
             Error
     end.
 
-save_task(#{ns_opts := #{storage := StorageOpts}, ns := NsId, task := Task} = Opts) ->
-    {ok, TaskId} = prg_storage:save_task(StorageOpts, NsId, Task),
+prepare_repair(#{ns_opts := #{storage := StorageOpts}, ns := NsId, id := ProcessId, task := Task} = Opts) ->
+    {ok, TaskId} = prg_storage:prepare_repair(StorageOpts, NsId, ProcessId, Task),
     Opts#{task => Task#{task_id => TaskId}}.
 
 get_task_result(#{ns_opts := #{storage := StorageOpts} = NsOpts, ns := NsId, idempotency_key := IdempotencyKey}) ->
@@ -181,7 +181,7 @@ await_task_result(_StorageOpts, _NsId, _KeyOrId, Timeout, Duration) when Duratio
 await_task_result(StorageOpts, NsId, KeyOrId, Timeout, Duration) ->
     case prg_storage:get_task_result(StorageOpts, NsId, KeyOrId) of
         {ok, Result} ->
-            {ok, Result};
+            Result;
         {error, in_progress} ->
             timer:sleep(?TASK_REPEAT_REQUEST_TIMEOUT),
             await_task_result(StorageOpts, NsId, KeyOrId, Timeout, Duration + ?TASK_REPEAT_REQUEST_TIMEOUT)

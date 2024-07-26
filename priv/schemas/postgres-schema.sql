@@ -1,6 +1,6 @@
 CREATE TYPE process_status AS ENUM ('running', 'error');
 CREATE TYPE task_status AS ENUM ('waiting', 'running', 'blocked', 'error', 'finished', 'cancelled');
-CREATE TYPE task_type AS ENUM ('init', 'timeout', 'call', 'notify', 'repair');
+CREATE TYPE task_type AS ENUM ('init', 'timeout', 'call', 'notify', 'repair', 'remove');
 
 CREATE TABLE IF NOT EXISTS default_processes(
     "process_id" VARCHAR(80) PRIMARY KEY,
