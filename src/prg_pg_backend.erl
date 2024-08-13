@@ -33,9 +33,7 @@
 
 -type pg_opts() :: #{pool := atom()}.
 
--define(EPOCH_DIFF, 62167219200).
 -define(PROTECT_TIMEOUT, 5). %% second
-
 
 %% Task management
 -spec get_task_result(pg_opts(), namespace_id(), {task_id | idempotency_key, binary()}) ->

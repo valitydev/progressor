@@ -19,7 +19,7 @@ init([]) ->
         period => 1},
     ChildSpecs = maps:fold(
         fun(ID, NsOpts, Acc) ->
-            FullOpts = prg_utils:make_ns_opts(NsOpts),
+            FullOpts = prg_utils:make_ns_opts(ID, NsOpts),
             NS = {ID, FullOpts},
             [
                 #{

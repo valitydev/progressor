@@ -42,13 +42,20 @@
 %%% Config options
 %%%
 -type namespace_opts() :: #{
+    namespace := id(),
     storage := storage_opts(),
     processor := processor_opts(),
+    notifier => notifier_opts(),
     retry_policy => retry_policy(),
     worker_pool_size => pos_integer(),
     process_step_timeout => timeout_sec(),
     task_scan_timeout => timeout_sec(),
     last_timer_repair => boolean()
+}.
+
+-type notifier_opts() :: #{
+    client => atom(),
+    options => term()
 }.
 
 -type processor_opts() :: #{
@@ -85,7 +92,7 @@
 -type task_type() :: binary().
 % <<"init">> | <<"call">> | <<"notify">> | <<"repair">> | <<"timeout">>
 
--type task_t() :: init | call | repair | notify | timeout.
+-type task_t() :: init | call | repair | notify | timeout | remove.
 -type task_origin() :: {pid(), reference()}.
 -type task_header() :: {task_t(), task_origin() | undefined}.
 
@@ -131,3 +138,5 @@
 }).
 
 -define(DEFAULT_WORKER_POOL_SIZE, 10).
+
+-define(EPOCH_DIFF, 62167219200).

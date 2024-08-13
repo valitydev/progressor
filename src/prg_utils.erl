@@ -6,7 +6,7 @@
 -export([registered_name/2]).
 -export([pipe/2]).
 -export([format/1]).
--export([make_ns_opts/1]).
+-export([make_ns_opts/2]).
 
 -spec registered_name(atom(), string()) -> atom().
 registered_name(BaseAtom, PostfixStr) ->
@@ -25,9 +25,10 @@ format(Term) when is_binary(Term) ->
 format(Term) ->
     unicode:characters_to_binary(io_lib:format("~64000p", [Term])).
 
--spec make_ns_opts(namespace_opts()) -> namespace_opts().
-make_ns_opts(NsOpts) ->
+-spec make_ns_opts(atom(), namespace_opts()) -> namespace_opts().
+make_ns_opts(NsId, NsOpts) ->
     PresetDefaults = #{
+        namespace => erlang:atom_to_binary(NsId),
         retry_policy => ?DEFAULT_RETRY_POLICY,
         worker_pool_size => ?DEFAULT_WORKER_POOL_SIZE,
         process_step_timeout => ?DEFAULT_STEP_TIMEOUT_SEC,

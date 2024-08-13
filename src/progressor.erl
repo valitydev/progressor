@@ -106,7 +106,7 @@ add_ns_opts(#{ns := NsId} = Opts) ->
         undefined ->
             {error, <<"namespace not found">>};
         NsOpts ->
-            Opts#{ns_opts => prg_utils:make_ns_opts(NsOpts)}
+            Opts#{ns_opts => prg_utils:make_ns_opts(NsId, NsOpts)}
     end.
 
 check_idempotency(#{idempotency_key := _IdempotencyKey} = Req) ->
@@ -204,9 +204,8 @@ process_call(#{ns := NsId, ns_opts := NsOpts, type := Type, task := Task}) ->
             erlang:raise(Class, {woody_error, {external, result_unexpected, prg_utils:format(Term)}}, []);
         {Ref, Result} ->
             Result
-    after
-        Timeout ->
-            {error, <<"timeout">>}
+    after Timeout ->
+        {error, <<"timeout">>}
     end.
 
 process_notify(#{ns := NsId, type := Type, task := Task}) ->

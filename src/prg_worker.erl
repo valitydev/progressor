@@ -15,7 +15,7 @@
 
 -define(SERVER, ?MODULE).
 
--record(prg_worker_state, {ns_id, ns_opts, num, process, processor_pid}).
+-record(prg_worker_state, {ns_id, ns_opts, num, process, sidecar_pid}).
 
 %%%
 %%% API
@@ -48,14 +48,14 @@ init([NsId, NsOpts, Num]) ->
     }, {continue, do_start}}.
 
 handle_continue(do_start, State = #prg_worker_state{ns_id = NsId}) ->
-    {ok, Pid} = prg_processor:start_link(),
+    {ok, Pid} = prg_worker_sidecar:start_link(),
     case prg_scheduler:pop_task(NsId, self()) of
         {TaskHeader, Task} ->
             ok = process_task(self(), TaskHeader, Task);
         not_found ->
             skip
     end,
-    {noreply, State#prg_worker_state{processor_pid = Pid}}.
+    {noreply, State#prg_worker_state{sidecar_pid = Pid}}.
 
 handle_call(_Request, _From, State = #prg_worker_state{}) ->
     {reply, ok, State}.
@@ -101,35 +101,41 @@ do_process_task(
     #{task_type := <<"remove">>} = _Task,
     State = #prg_worker_state{
         ns_id = NsId,
-        ns_opts = #{storage := StorageOpts},
-        process = #{process_id := ProcessId} = _Process
+        ns_opts = #{storage := StorageOpts, process_step_timeout := TimeoutSec} = NsOpts,
+        process = #{process_id := ProcessId} = _Process,
+        sidecar_pid = Pid
     }
 ) ->
-    ok = prg_storage:remove_process(StorageOpts, NsId, ProcessId),
+    Deadline = erlang:system_time(millisecond) + TimeoutSec * 1000,
+    ok = prg_worker_sidecar:lifecycle_sink(Pid, Deadline, NsOpts, remove, ProcessId),
+    ok = prg_worker_sidecar:remove_process(Pid, Deadline, StorageOpts, NsId, ProcessId),
     ok = next_task(self()),
     State#prg_worker_state{process = undefined};
 do_process_task(TaskHeader, Task,
     State = #prg_worker_state{
-        ns_opts = #{processor := Processor, process_step_timeout := TimeoutSec},
+        ns_opts = #{process_step_timeout := TimeoutSec} = NsOpts,
         process = Process,
-        processor_pid = Pid
+        sidecar_pid = Pid
     }
 ) ->
     Args = maps:get(args, Task, <<>>),
     Ctx = maps:get(context, Task, <<>>),
     Request = {extract_task_type(TaskHeader), Args, Process},
-    Result = prg_processor:process(Pid, Processor, Request, Ctx, TimeoutSec * 1000),
-    handle_result(Result, TaskHeader, Task, State).
+    Deadline = erlang:system_time(millisecond) + TimeoutSec * 1000,
+    Result = prg_worker_sidecar:process(Pid, Deadline, NsOpts, Request, Ctx),
+    handle_result(Result, TaskHeader, Task, Deadline, State).
 
 %% success result with continuation
 handle_result(
     {ok, #{action := #{set_timer := Timestamp} = Action, events := Events} = Result},
     TaskHeader,
     #{task_id := TaskId, context := Context} = Task,
+    Deadline,
     State = #prg_worker_state{
         ns_id = NsId,
-        ns_opts = #{storage := StorageOpts} = _NsOpts,
-        process = #{process_id := ProcessId} = Process
+        ns_opts = #{storage := StorageOpts} = NsOpts,
+        process = #{process_id := ProcessId} = Process,
+        sidecar_pid = Pid
     }
 ) ->
     Now = erlang:system_time(second),
@@ -157,12 +163,14 @@ handle_result(
         },
         maps:with([metadata], Task)
     ),
+    ok = prg_worker_sidecar:lifecycle_sink(Pid, Deadline, NsOpts, extract_task_type(TaskHeader), ProcessId),
+    ok = prg_worker_sidecar:event_sink(Pid, Deadline, NsOpts, ProcessId, Events),
     ok = maybe_wait_call(application:get_env(progressor, call_wait_timeout, undefined)),
     case prg_storage:search_postponed_calls(StorageOpts, NsId, ProcessId) of
         {ok, CallTask} ->
             %% save new task as blocked and process call
-            {ok, _} = prg_storage:complete_and_continue(StorageOpts, NsId, TaskResult, ProcessUpdated, Events,
-                NewTask#{status => <<"blocked">>}),
+            {ok, _} = prg_worker_sidecar:complete_and_continue(Pid, Deadline, StorageOpts, NsId, TaskResult,
+                ProcessUpdated, Events, NewTask#{status => <<"blocked">>}),
             _ = maybe_reply(TaskHeader, Response),
             NewHistory = maps:get(history, Process) ++ Events,
             ok = continuation_task(self(), {call, undefined}, CallTask),
@@ -171,16 +179,16 @@ handle_result(
             case operation(Timestamp, Now) of
                 postpone ->
                     %% save new task as waiting and go to next task
-                    {ok, _} = prg_storage:complete_and_continue(StorageOpts, NsId, TaskResult, ProcessUpdated, Events,
-                        NewTask#{status => <<"waiting">>}),
+                    {ok, _} = prg_worker_sidecar:complete_and_continue(Pid, Deadline, StorageOpts, NsId, TaskResult,
+                        ProcessUpdated, Events, NewTask#{status => <<"waiting">>}),
                     _ = maybe_reply(TaskHeader, Response),
                     ok = next_task(self()),
                     State#prg_worker_state{process = undefined};
                 continuation ->
                     %% save new task as running and try continuation
                     NextTask0 = NewTask#{status => <<"running">>, running_time => Timestamp},
-                    {ok, NextTaskId} = prg_storage:complete_and_continue(StorageOpts, NsId, TaskResult, ProcessUpdated,
-                        Events, NextTask0),
+                    {ok, NextTaskId} = prg_worker_sidecar:complete_and_continue(Pid, Deadline, StorageOpts, NsId,
+                        TaskResult, ProcessUpdated, Events, NextTask0),
                     _ = maybe_reply(TaskHeader, Response),
                     NextTask = NextTask0#{task_id => NextTaskId},
                     case prg_scheduler:continuation_task(NsId, self(), NextTask) of
@@ -200,14 +208,17 @@ handle_result(
     {ok, #{action := #{remove := true}} = Result},
     TaskHeader,
     _Task,
+    Deadline,
     State = #prg_worker_state{
         ns_id = NsId,
-        ns_opts = #{storage := StorageOpts} = _NsOpts,
-        process = #{process_id := ProcessId}= _Process
+        ns_opts = #{storage := StorageOpts} = NsOpts,
+        process = #{process_id := ProcessId} = _Process,
+        sidecar_pid = Pid
     }
 ) ->
     Response = response(maps:get(response, Result, undefined)),
-    ok = prg_storage:remove_process(StorageOpts, NsId, ProcessId),
+    ok = prg_worker_sidecar:lifecycle_sink(Pid, Deadline, NsOpts, remove, ProcessId),
+    ok = prg_worker_sidecar:remove_process(Pid, Deadline, StorageOpts, NsId, ProcessId),
     _ = maybe_reply(TaskHeader, Response),
     ok = next_task(self()),
     State#prg_worker_state{process = undefined};
@@ -217,12 +228,16 @@ handle_result(
     {ok, #{events := Events} = Result},
     TaskHeader,
     #{task_id := TaskId} = _Task,
+    Deadline,
     State = #prg_worker_state{
         ns_id = NsId,
-        ns_opts = #{storage := StorageOpts} = _NsOpts,
-        process = Process
+        ns_opts = #{storage := StorageOpts} = NsOpts,
+        process = #{process_id := ProcessId} = Process,
+        sidecar_pid = Pid
     }
 ) ->
+    ok = prg_worker_sidecar:lifecycle_sink(Pid, Deadline, NsOpts, extract_task_type(TaskHeader), ProcessId),
+    ok = prg_worker_sidecar:event_sink(Pid, Deadline, NsOpts, ProcessId, Events),
     ProcessUpdated = update_process(Process#{status => <<"running">>}, Result),
     Response = response(maps:get(response, Result, undefined)),
     TaskResult = #{
@@ -233,9 +248,11 @@ handle_result(
     },
     case maps:get(action, Result, undefined) of
         unset_timer ->
-            ok = prg_storage:complete_and_suspend(StorageOpts, NsId, TaskResult, ProcessUpdated, Events);
+            ok = prg_worker_sidecar:complete_and_suspend(Pid, Deadline, StorageOpts, NsId, TaskResult,
+                ProcessUpdated, Events);
         undefined ->
-            ok = prg_storage:complete_and_unlock(StorageOpts, NsId, TaskResult, ProcessUpdated, Events)
+            ok = prg_worker_sidecar:complete_and_unlock(Pid, Deadline, StorageOpts, NsId, TaskResult,
+                ProcessUpdated, Events)
     end,
     _ = maybe_reply(TaskHeader, Response),
     ok = next_task(self()),
@@ -246,10 +263,12 @@ handle_result(
     {error, Reason} = Response,
     {TaskType, _} = TaskHeader,
     #{task_id := TaskId} = _Task,
+    Deadline,
     State = #prg_worker_state{
         ns_id = NsId,
-        ns_opts = #{storage := StorageOpts} = _NsOpts,
-        process = Process
+        ns_opts = #{storage := StorageOpts} = NsOpts,
+        process = #{process_id := ProcessId} = Process,
+        sidecar_pid = Pid
     }
 ) when
     TaskType =:= init;
@@ -257,27 +276,36 @@ handle_result(
     TaskType =:= notify;
     TaskType =:= repair
 ->
-    ProcessUpdated = Process#{status => <<"error">>, detail => prg_utils:format(Reason)},
+    ProcessUpdated = case TaskType of
+        repair ->
+            Process;
+        _ ->
+            Detail = prg_utils:format(Reason),
+            ok = prg_worker_sidecar:lifecycle_sink(Pid, Deadline, NsOpts, {error, Detail}, ProcessId),
+            Process#{status => <<"error">>, detail => Detail}
+    end,
     TaskResult = #{
         task_id => TaskId,
         response => term_to_binary(Response),
         finished_time => erlang:system_time(second),
         status => <<"error">>
     },
-    ok = prg_storage:complete_and_error(StorageOpts, NsId, TaskResult, ProcessUpdated),
+    ok = prg_worker_sidecar:complete_and_error(Pid, Deadline, StorageOpts, NsId, TaskResult, ProcessUpdated),
     _ = maybe_reply(TaskHeader, {error, <<"process is error">>}),
     ok = next_task(self()),
     State#prg_worker_state{process = undefined};
 
-%% timeout processing error
+%% timeout/remove processing error
 handle_result(
     {error, Reason} = Response,
     {TaskType, _} = TaskHeader,
     #{task_id := TaskId} = Task,
+    Deadline,
     State = #prg_worker_state{
         ns_id = NsId,
-        ns_opts = #{storage := StorageOpts, retry_policy := RetryPolicy},
-        process = Process
+        ns_opts = #{storage := StorageOpts, retry_policy := RetryPolicy} = NsOpts,
+        process = #{process_id := ProcessId} = Process,
+        sidecar_pid = Pid
     }
 ) when TaskType =:= timeout; TaskType =:= remove ->
     TaskResult = #{
@@ -288,14 +316,16 @@ handle_result(
     },
     case check_retryable(TaskHeader, Task, RetryPolicy, Reason) of
         not_retryable ->
-            ProcessUpdated = Process#{status => <<"error">>, detail => prg_utils:format(Reason)},
-            ok = prg_storage:complete_and_error(StorageOpts, NsId, TaskResult, ProcessUpdated);
+            Detail = prg_utils:format(Reason),
+            ProcessUpdated = Process#{status => <<"error">>, detail => Detail},
+            ok = prg_worker_sidecar:lifecycle_sink(Pid, Deadline, NsOpts, {error, Detail}, ProcessId),
+            ok = prg_worker_sidecar:complete_and_error(Pid, Deadline, StorageOpts, NsId, TaskResult, ProcessUpdated);
         NewTask ->
-            {ok, _NextTaskId} = prg_storage:complete_and_continue(StorageOpts, NsId, TaskResult, Process, [], NewTask)
+            {ok, _NextTaskId} = prg_worker_sidecar:complete_and_continue(Pid, Deadline, StorageOpts, NsId,
+                TaskResult, Process, [], NewTask)
     end,
     ok = next_task(self()),
     State#prg_worker_state{process = undefined}.
-
 
 update_process(Process, Result) ->
     case Result of
