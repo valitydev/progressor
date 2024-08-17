@@ -7,6 +7,9 @@
 -export([event_sink/3]).
 -export([lifecycle_sink/3]).
 
+%% internals
+-export([serialize_content/1]).
+
 -spec event_sink(namespace_opts(), id(), [event()]) -> ok | no_return().
 event_sink(_NsOpts, _ID, []) ->
     ok;
@@ -92,7 +95,7 @@ serialize_eventsink(SourceNS, SourceID, Event) ->
             event_id = EventID,
             created_at = serialize_timestamp(Timestamp),
             format_version = maps:get(format_version, Metadata, undefined),
-            data = serialize_content(Content)
+            data = Content
         }},
     Type = {struct, union, {mg_proto_event_sink_thrift, 'SinkEvent'}},
     case thrift_strict_binary_codec:write(Codec, Type, Data) of

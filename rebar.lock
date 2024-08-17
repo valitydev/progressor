@@ -7,7 +7,7 @@
  {<<"crc32cer">>,{pkg,<<"crc32cer">>,<<"0.1.8">>},2},
  {<<"epg_connector">>,
   {git,"https://github.com/valitydev/epg_connector.git",
-       {ref,"7fc3aa1b6d9c8be69a64fefd18f6aaa416dcd572"}},
+       {ref,"d435cb934c79ba82ab73f3926b8f6eb71622bcc5"}},
   0},
  {<<"epgsql">>,
   {git,"https://github.com/epgsql/epgsql.git",
