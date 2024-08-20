@@ -433,7 +433,7 @@ cleanup(#{pool := Pool}, NsId) ->
 %% Internal functions
 
 construct_table_name(NsId, Postfix) ->
-    erlang:atom_to_list(NsId) ++ Postfix.
+    "\"" ++ erlang:atom_to_list(NsId) ++ Postfix ++ "\"".
 
 create_range_condition(#{offset := Offset, limit := Limit}) ->
     " WHERE event_id > " ++ integer_to_list(Offset) ++ " AND event_id <= " ++ integer_to_list(Offset + Limit) ++ " ";
