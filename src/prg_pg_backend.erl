@@ -153,7 +153,7 @@ search_tasks(#{pool := Pool}, NsId, Timeout, Limit) ->
                 "    WHERE running_time < $1 AND status = 'running' AND task_type IN ('init', 'call', 'notify', 'repair')"
                 "    RETURNING process_id"
                 ") "
-                "UPDATE " ++ ProcessesTable ++ " SET status = 'error' "
+                "UPDATE " ++ ProcessesTable ++ " SET status = 'error', detail = 'unexpected error' "
                 "WHERE process_id IN (SELECT process_id FROM task_update)",
                 [TsBackward]
             ),

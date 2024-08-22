@@ -139,9 +139,10 @@ handle_call(
     _From,
     State = #prg_processor_state{}
 ) ->
-    %% TODO loop
-    Response =
-        prg_storage:complete_and_continue(StorageOpts, NsId, TaskResult, Process, Events, Task),
+    Fun = fun() ->
+        prg_storage:complete_and_continue(StorageOpts, NsId, TaskResult, Process, Events, Task)
+    end,
+    Response = do_with_retry(Fun, ?DEFAULT_DELAY),
     {reply, Response, State};
 
 handle_call(
@@ -149,9 +150,10 @@ handle_call(
     _From,
     State = #prg_processor_state{}
 ) ->
-    %% TODO loop
-    Response =
-        prg_storage:remove_process(StorageOpts, NsId, ProcessId),
+    Fun = fun() ->
+        prg_storage:remove_process(StorageOpts, NsId, ProcessId)
+    end,
+    Response = do_with_retry(Fun, ?DEFAULT_DELAY),
     {reply, Response, State};
 
 handle_call(
@@ -159,9 +161,10 @@ handle_call(
     _From,
     State = #prg_processor_state{}
 ) ->
-    %% TODO loop
-    Response =
-        prg_storage:complete_and_suspend(StorageOpts, NsId, TaskResult, Process, Events),
+    Fun = fun() ->
+        prg_storage:complete_and_suspend(StorageOpts, NsId, TaskResult, Process, Events)
+    end,
+    Response = do_with_retry(Fun, ?DEFAULT_DELAY),
     {reply, Response, State};
 
 handle_call(
@@ -169,9 +172,10 @@ handle_call(
     _From,
     State = #prg_processor_state{}
 ) ->
-    %% TODO loop
-    Response =
-        prg_storage:complete_and_unlock(StorageOpts, NsId, TaskResult, Process, Events),
+    Fun = fun() ->
+        prg_storage:complete_and_unlock(StorageOpts, NsId, TaskResult, Process, Events)
+    end,
+    Response = do_with_retry(Fun, ?DEFAULT_DELAY),
     {reply, Response, State};
 
 handle_call(
@@ -179,21 +183,20 @@ handle_call(
     _From,
     State = #prg_processor_state{}
 ) ->
-    %% TODO loop
-    Response =
-        prg_storage:complete_and_error(StorageOpts, NsId, TaskResult, Process),
+    Fun = fun() ->
+        prg_storage:complete_and_error(StorageOpts, NsId, TaskResult, Process)
+    end,
+    Response = do_with_retry(Fun, ?DEFAULT_DELAY),
     {reply, Response, State};
 
 handle_call({event_sink, NsOpts, ProcessId, Events}, _From, State) ->
     Fun = fun() -> prg_notifier:event_sink(NsOpts, ProcessId, Events) end,
-    ExpectedResult = ok,
-    Response = do_with_retry(Fun, ExpectedResult, ?DEFAULT_DELAY),
+    Response = do_with_retry(Fun, ?DEFAULT_DELAY),
     {reply, Response, State};
 
 handle_call({lifecycle_sink, NsOpts, TaskType, ProcessId}, _From, State) ->
     Fun = fun() -> prg_notifier:lifecycle_sink(NsOpts, TaskType, ProcessId) end,
-    ExpectedResult = ok,
-    Response = do_with_retry(Fun, ExpectedResult, ?DEFAULT_DELAY),
+    Response = do_with_retry(Fun, ?DEFAULT_DELAY),
     {reply, Response, State}.
 
 handle_cast(_Request, State = #prg_processor_state{}) ->
@@ -212,17 +215,21 @@ code_change(_OldVsn, State = #prg_processor_state{}, _Extra) ->
 %%% Internal functions
 %%%===================================================================
 
-do_with_retry(Fun, ExpectedResult, Delay) ->
+do_with_retry(Fun, Delay) ->
     try Fun() of
-        Result when Result =:= ExpectedResult ->
+        ok = Result ->
             Result;
-        _Unexpected ->
+        {ok, _} = Result ->
+            Result;
+        _Error ->
+            io:format(user, "ERROR: ~p~n", [_Error]),
             %% TODO log
             timer:sleep(Delay),
-            do_with_retry(Fun, ExpectedResult, Delay)
+            do_with_retry(Fun, Delay)
     catch
-        _:_ ->
+        _Class:_Error ->
+            io:format(user, "EXCEPTION: ~p~n", [[_Class, _Error]]),
             %% TODO log
             timer:sleep(Delay),
-            do_with_retry(Fun, ExpectedResult, Delay)
+            do_with_retry(Fun, Delay)
     end.

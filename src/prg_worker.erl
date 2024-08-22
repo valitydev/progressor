@@ -13,8 +13,6 @@
 -export([continuation_task/3]).
 -export([next_task/1]).
 
--define(SERVER, ?MODULE).
-
 -record(prg_worker_state, {ns_id, ns_opts, num, process, sidecar_pid}).
 
 %%%

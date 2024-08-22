@@ -7,6 +7,7 @@
    [kernel,
     stdlib,
     jsx,
+    herd,
     epg_connector,
     thrift,
     mg_proto,
