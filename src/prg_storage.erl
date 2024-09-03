@@ -6,7 +6,7 @@
 -export([get_task_result/3]).
 -export([search_tasks/4]).
 -export([save_task/3]).
--export([search_postponed_calls/3]).
+-export([get_task/3]).
 
 %% Process management
 -export([get_process_status/3]).
@@ -18,7 +18,6 @@
 -export([prepare_init/4]).
 -export([prepare_call/4]).
 -export([prepare_repair/4]).
-%% TODO must be retryable
 -export([complete_and_continue/6]).
 -export([complete_and_suspend/5]).
 -export([complete_and_unlock/5]).
@@ -37,13 +36,14 @@
 get_task_result(#{client := prg_pg_backend, options := PgOpts}, NsId, KeyOrId) ->
     prg_pg_backend:get_task_result(PgOpts, NsId, KeyOrId).
 
+%%
+-spec get_task(storage_opts(), namespace_id(), task_id()) -> {ok, task()} | {error, _Reason}.
+get_task(#{client := prg_pg_backend, options := PgOpts}, NsId, TaskId) ->
+    prg_pg_backend:get_task(PgOpts, NsId, TaskId).
+
 -spec save_task(storage_opts(), namespace_id(), task()) -> {ok, task_id()}.
 save_task(#{client := prg_pg_backend, options := PgOpts}, NsId, Task) ->
     prg_pg_backend:save_task(PgOpts, NsId, Task).
-
--spec search_postponed_calls(storage_opts(), namespace_id(), id()) -> {ok, task()} | {error, not_found}.
-search_postponed_calls(#{client := prg_pg_backend, options := PgOpts}, NsId, Id) ->
-    prg_pg_backend:search_postponed_calls(PgOpts, NsId, Id).
 
 %% Process management
 -spec get_process_status(storage_opts(), namespace_id(), id()) -> {ok, _Result} | {error, _Reason}.
@@ -79,13 +79,14 @@ prepare_call(#{client := prg_pg_backend, options := PgOpts}, NsId, ProcessId, Ta
 -spec prepare_repair(storage_opts(), namespace_id(), id(), task()) -> {ok, task_id()} | {error, _Reason}.
 prepare_repair(#{client := prg_pg_backend, options := PgOpts}, NsId, ProcessId, RepairTask) ->
     prg_pg_backend:prepare_repair(PgOpts, NsId, ProcessId, RepairTask).
-
+%%
 -spec complete_and_continue(storage_opts(), namespace_id(), task_result(), process(), [event()], task()) ->
-    {ok, task_id()}.
+    {ok, [task()]}.
 complete_and_continue(#{client := prg_pg_backend, options := PgOpts}, NsId, TaskResult, Process, Events, NextTask) ->
     prg_pg_backend:complete_and_continue(PgOpts, NsId, TaskResult, Process, Events, NextTask).
 
--spec complete_and_suspend(storage_opts(), namespace_id(), task_result(), process(), [event()]) -> ok.
+-spec complete_and_suspend(storage_opts(), namespace_id(), task_result(), process(), [event()]) ->
+    {ok, [task()]}.
 complete_and_suspend(#{client := prg_pg_backend, options := PgOpts}, NsId, TaskResult, Process, Events) ->
     prg_pg_backend:complete_and_suspend(PgOpts, NsId, TaskResult, Process, Events).
 
@@ -93,7 +94,8 @@ complete_and_suspend(#{client := prg_pg_backend, options := PgOpts}, NsId, TaskR
 complete_and_error(#{client := prg_pg_backend, options := PgOpts}, NsId, TaskResult, Process) ->
     prg_pg_backend:complete_and_error(PgOpts, NsId, TaskResult, Process).
 
--spec complete_and_unlock(storage_opts(), namespace_id(), task_result(), process(), [event()]) -> ok.
+-spec complete_and_unlock(storage_opts(), namespace_id(), task_result(), process(), [event()]) ->
+    {ok, [task()]}.
 complete_and_unlock(#{client := prg_pg_backend, options := PgOpts}, NsId, TaskResult, Process, Events) ->
     prg_pg_backend:complete_and_unlock(PgOpts, NsId, TaskResult, Process, Events).
 

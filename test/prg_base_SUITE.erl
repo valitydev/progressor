@@ -15,6 +15,8 @@
 -export([call_replace_timer_test/1]).
 -export([call_unset_timer_test/1]).
 -export([postponed_call_test/1]).
+-export([postponed_call_to_suspended_process_test/1]).
+-export([multiple_calls_test/1]).
 -export([repair_after_non_retriable_error_test/1]).
 -export([error_after_max_retries_test/1]).
 -export([repair_after_call_error_test/1]).
@@ -35,6 +37,8 @@ all() -> [
     call_replace_timer_test,
     call_unset_timer_test,
     postponed_call_test,
+    postponed_call_to_suspended_process_test,
+    multiple_calls_test,
     repair_after_non_retriable_error_test,
     error_after_max_retries_test,
     repair_after_call_error_test,
@@ -53,10 +57,12 @@ simple_timers_test(_C) ->
     Id = gen_id(),
     {ok, ok} = progressor:init(#{ns => ?NS, id => Id, args => <<"init_args">>}),
     3 = expect_steps_counter(3),
+    ExpectedAux = erlang:term_to_binary(<<"aux_state2">>),
     {ok, #{
         process_id := Id,
         status := <<"running">>,
-        aux_state := _AuxState,
+        aux_state := ExpectedAux,
+        metadata := #{<<"k">> := <<"v">>},
         history := [
             #{
                 event_id := 1,
@@ -79,7 +85,7 @@ simple_timers_test(_C) ->
 simple_call_test(_C) ->
     %% steps:
     %% 1. init ->    [event1], timer 2s
-    %% 2. call ->    [event2], undefined
+    %% 2. call ->    [event2], undefined (duration 3s)
     %% 3. timeout -> [event3], undefined
     _ = mock_processor(simple_call_test),
     Id = gen_id(),
@@ -209,6 +215,74 @@ postponed_call_test(_C) ->
     }} = progressor:get(#{ns => ?NS, id => Id}),
     ok.
 %%
+-spec postponed_call_to_suspended_process_test(_) -> _.
+postponed_call_to_suspended_process_test(_C) ->
+    %% call between 0 sec timers
+    %% steps:
+    %% 1. init ->    [],       timer 0s
+    %% 2. timeout -> [event1], undefined (process duration 3000)
+    %% 3. call ->    [event2], undefined
+    _ = mock_processor(postponed_call_to_suspended_process_test),
+    Id = gen_id(),
+    {ok, ok} = progressor:init(#{ns => ?NS, id => Id, args => <<"init_args">>}),
+    {ok, <<"response">>} = progressor:call(#{ns => ?NS, id => Id, args => <<"call_args">>}),
+    3 = expect_steps_counter(3),
+    {ok, #{
+        process_id := Id,
+        status := <<"running">>,
+        history := [
+            #{
+                event_id := 1,
+                metadata := #{<<"format_version">> := 1},
+                payload := _Pl1,
+                timestamp := _Ts1
+            },
+            #{
+                event_id := 2,
+                metadata := #{<<"format_version">> := 1},
+                payload := _Pl2,
+                timestamp := _Ts2
+            }
+        ]
+    }} = progressor:get(#{ns => ?NS, id => Id}),
+    ok.
+%%
+-spec multiple_calls_test(_) -> _.
+multiple_calls_test(_C) ->
+    %% call between 0 sec timers
+    %% steps:
+    %% 1.  init ->    [],        undefined
+    %% 2.  call ->    [event1],  undefined
+    %% ...
+    %% 11. call ->    [event10], undefined
+    _ = mock_processor(multiple_calls_test),
+    Id = gen_id(),
+    {ok, ok} = progressor:init(#{ns => ?NS, id => Id, args => <<"init_args">>}),
+    lists:foreach(
+        fun(N) ->
+            spawn(progressor, call, [#{ns => ?NS, id => Id, args => <<N>>}])
+        end,
+        lists:seq(1, 10)
+    ),
+    11 = expect_steps_counter(33),
+    {ok, #{
+        process_id := Id,
+        status := <<"running">>,
+        history := [
+            #{event_id := 1},
+            #{event_id := 2},
+            #{event_id := 3},
+            #{event_id := 4},
+            #{event_id := 5},
+            #{event_id := 6},
+            #{event_id := 7},
+            #{event_id := 8},
+            #{event_id := 9},
+            #{event_id := 10}
+        ]
+    }} = progressor:get(#{ns => ?NS, id => Id}),
+    ok.
+
 -spec repair_after_non_retriable_error_test(_) -> _.
 repair_after_non_retriable_error_test(_C) ->
     %% steps:
@@ -245,7 +319,8 @@ repair_after_non_retriable_error_test(_C) ->
                 timestamp := _Ts2
             }
         ]
-    }} = progressor:get(#{ns => ?NS, id => Id}),
+    } = Process} = progressor:get(#{ns => ?NS, id => Id}),
+    false = erlang:is_map_key(detail, Process),
     ok.
 %%
 -spec error_after_max_retries_test(_) -> _.
@@ -277,21 +352,21 @@ repair_after_call_error_test(_C) ->
     _ = mock_processor(repair_after_call_error_test),
     Id = gen_id(),
     {ok, ok} = progressor:init(#{ns => ?NS, id => Id, args => <<"init_args">>}),
-    %% FIXME BUG: incorrect Reason returning
-    {error, _} = progressor:call(#{ns => ?NS, id => Id, args => <<"call_args">>}),
+    {error, retry_this} = progressor:call(#{ns => ?NS, id => Id, args => <<"call_args">>}),
     2 = expect_steps_counter(2),
     {ok, #{
         detail := <<"retry_this">>,
+        metadata := #{<<"k">> := <<"v">>},
         history := [],
         process_id := Id,
         status := <<"error">>
     }} = progressor:get(#{ns => ?NS, id => Id}),
-    %% FIXME BUG: incorrect Reason returning
-    {error, _} = progressor:repair(#{ns => ?NS, id => Id, args => <<"bad_repair_args">>}),
+    {error, <<"repair_error">>} = progressor:repair(#{ns => ?NS, id => Id, args => <<"bad_repair_args">>}),
     3 = expect_steps_counter(3),
     %% shoul not rewrite detail
     {ok, #{
         detail := <<"retry_this">>,
+        metadata := #{<<"k">> := <<"v">>},
         history := [],
         process_id := Id,
         status := <<"error">>
@@ -301,6 +376,7 @@ repair_after_call_error_test(_C) ->
     {ok, #{
         process_id := Id,
         status := <<"running">>,
+        metadata := #{<<"k2">> := <<"v2">>},
         history := [
             #{
                 event_id := 1,
@@ -346,7 +422,7 @@ remove_by_timer_test(_C) ->
 remove_without_timer_test(_C) ->
     %% steps:
     %% 1. init -> [event1], timer 2s
-    %% 2. timeout -> [],            remove
+    %% 2. timeout -> [],    remove
     _ = mock_processor(remove_without_timer_test),
     Id = gen_id(),
     {ok, ok} = progressor:init(#{ns => ?NS, id => Id, args => <<"init_args">>}),
@@ -377,6 +453,7 @@ mock_processor(simple_timers_test = TestCase) ->
             0 ->
                 Result = #{
                     events => [event(1)],
+                    metadata => #{<<"k">> => <<"v">>},
                     %% postponed timer
                     action => #{set_timer => erlang:system_time(second) + 2},
                     aux_state => erlang:term_to_binary(<<"aux_state1">>)
@@ -528,6 +605,54 @@ mock_processor(postponed_call_test = TestCase) ->
     end,
     mock_processor(TestCase, MockProcessor);
 %%
+mock_processor(postponed_call_to_suspended_process_test = TestCase) ->
+    Self = self(),
+    MockProcessor = fun
+        ({init, <<"init_args">>, _Process}, _Opts, _Ctx) ->
+            Result = #{
+                events => [],
+                action => #{set_timer => erlang:system_time(second)}
+            },
+            Self ! 1,
+            {ok, Result};
+        ({timeout, <<>>, #{history := []} = _Process}, _Opts, _Ctx) ->
+            timer:sleep(3000),
+            Result = #{
+                events => [event(1)]
+            },
+            Self ! 2,
+            {ok, Result};
+        ({call, <<"call_args">>, #{history := History} = _Process}, _Opts, _Ctx) ->
+            ?assertEqual(1, erlang:length(History)),
+            Result = #{
+                response => <<"response">>,
+                events => [event(2)]
+            },
+            Self ! 3,
+            {ok, Result}
+    end,
+    mock_processor(TestCase, MockProcessor);
+%%
+mock_processor(multiple_calls_test = TestCase) ->
+    Self = self(),
+    MockProcessor = fun
+        ({init, <<"init_args">>, _Process}, _Opts, _Ctx) ->
+            Result = #{
+                events => []
+            },
+            Self ! 1,
+            {ok, Result};
+        ({call, <<N>>, _Process}, _Opts, _Ctx) ->
+            timer:sleep(100),
+            Result = #{
+                response => <<"response">>,
+                events => [event(N)]
+            },
+            Self ! iterate,
+            {ok, Result}
+    end,
+    mock_processor(TestCase, MockProcessor);
+%%
 mock_processor(repair_after_non_retriable_error_test = TestCase) ->
     Self = self(),
     MockProcessor = fun
@@ -579,13 +704,14 @@ mock_processor(repair_after_call_error_test = TestCase) ->
     MockProcessor = fun
         ({init, <<"init_args">>, _Process}, _Opts, _Ctx) ->
             Result = #{
+                metadata => #{<<"k">> => <<"v">>},
                 events => []
             },
             Self ! 1,
             {ok, Result};
         ({call, <<"call_args">>, #{history := []} = _Process}, _Opts, _Ctx) ->
             Self ! 2,
-            %% retriable error for call must be ignore and process set  error status
+            %% retriable error for call must be ignore and process set error status
             {error, retry_this};
         ({repair, <<"bad_repair_args">>, #{history := []} = _Process}, _Opts, _Ctx) ->
             %% repair error should not rewrite process detail
@@ -593,6 +719,7 @@ mock_processor(repair_after_call_error_test = TestCase) ->
             {error, <<"repair_error">>};
         ({repair, <<"repair_args">>, #{history := []} = _Process}, _Opts, _Ctx) ->
             Result = #{
+                metadata => #{<<"k2">> => <<"v2">>},
                 events => [event(1)]
             },
             Self ! 4,

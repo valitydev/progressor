@@ -8,8 +8,8 @@
     detail => binary(),
     aux_state => binary(),
     metadata => map(),
-    history => [event()]
-    %% timer => timestamp_sec()
+    history => [event()],
+    corrupted_by => task_id()
 }.
 
 -type task() :: #{
@@ -17,8 +17,9 @@
     process_id := id(),
     task_type := task_type(),
     status := task_status(),
-    scheduled_time := timestamp_ms(),
-    running_time => timestamp_ms(),
+    scheduled_time := timestamp_sec(),
+    running_time => timestamp_sec(),
+    finished_time => timestamp_sec(),
     args => binary(),
     metadata => map(),
     idempotency_key => binary(),
@@ -113,7 +114,7 @@
     }}
     | {error, binary()}.
 
--type action() :: #{set_timer := pos_integer(), remove => true} | unset_timer.
+-type action() :: #{set_timer := timestamp_sec(), remove => true} | unset_timer.
 
 -type task_result() :: #{
     task_id := task_id(),

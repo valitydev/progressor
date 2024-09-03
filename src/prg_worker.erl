@@ -20,7 +20,7 @@
 %%%
 
 -spec process_task(pid(), task_header(), task()) -> ok.
-process_task(Worker, TaskHeader, Task) ->
+process_task(Worker, TaskHeader, #{process_id := _ProcessId, task_id := _TaskId} = Task) ->
     gen_server:cast(Worker, {process_task, TaskHeader, Task}).
 
 -spec continuation_task(pid(), task_header(), task()) -> ok.
@@ -76,9 +76,7 @@ handle_cast(next_task, State = #prg_worker_state{ns_id = NsId, ns_opts = NsOpts}
             not_found ->
                 State
         end,
-    {noreply, NewState};
-handle_cast(_Request, State = #prg_worker_state{}) ->
-    {noreply, State}.
+    {noreply, NewState}.
 
 handle_info(_Info, State = #prg_worker_state{}) ->
     {noreply, State}.
@@ -111,6 +109,7 @@ do_process_task(
     State#prg_worker_state{process = undefined};
 do_process_task(TaskHeader, Task,
     State = #prg_worker_state{
+        ns_id = _NsId,
         ns_opts = #{process_step_timeout := TimeoutSec} = NsOpts,
         process = Process,
         sidecar_pid = Pid
@@ -123,7 +122,7 @@ do_process_task(TaskHeader, Task,
     Result = prg_worker_sidecar:process(Pid, Deadline, NsOpts, Request, Ctx),
     handle_result(Result, TaskHeader, Task, Deadline, State).
 
-%% success result with continuation
+%% success result with timer
 handle_result(
     {ok, #{action := #{set_timer := Timestamp} = Action, events := Events} = Result},
     TaskHeader,
@@ -137,7 +136,7 @@ handle_result(
     }
 ) ->
     Now = erlang:system_time(second),
-    ProcessUpdated = update_process(Process#{status => <<"running">>}, Result),
+    ProcessUpdated = update_process(maps:without([detail,corrupted_by], Process#{status => <<"running">>}), Result),
     Response = response(maps:get(response, Result, undefined)),
     TaskResult = #{
         task_id => TaskId,
@@ -145,15 +144,11 @@ handle_result(
         finished_time => Now,
         status => <<"finished">>
     },
-    NewTaskType =
-        case Action of
-            #{remove := true} -> <<"remove">>;
-            _ -> <<"timeout">>
-        end,
     NewTask = maps:merge(
         #{
             process_id => ProcessId,
-            task_type => NewTaskType,
+            task_type => action_to_task_type(Action),
+            status => create_status(Timestamp, Now),
             scheduled_time => Timestamp,
             context => Context,
             last_retry_interval => 0,
@@ -163,42 +158,20 @@ handle_result(
     ),
     ok = prg_worker_sidecar:lifecycle_sink(Pid, Deadline, NsOpts, extract_task_type(TaskHeader), ProcessId),
     ok = prg_worker_sidecar:event_sink(Pid, Deadline, NsOpts, ProcessId, Events),
+    %% just for tests
     ok = maybe_wait_call(application:get_env(progressor, call_wait_timeout, undefined)),
-    case prg_storage:search_postponed_calls(StorageOpts, NsId, ProcessId) of
-        {ok, CallTask} ->
-            %% save new task as blocked and process call
-            {ok, _} = prg_worker_sidecar:complete_and_continue(Pid, Deadline, StorageOpts, NsId, TaskResult,
-                ProcessUpdated, Events, NewTask#{status => <<"blocked">>}),
-            _ = maybe_reply(TaskHeader, Response),
+    %%
+    SaveResult = prg_worker_sidecar:complete_and_continue(Pid, Deadline, StorageOpts, NsId, TaskResult,
+        ProcessUpdated, Events, NewTask),
+    _ = maybe_reply(TaskHeader, Response),
+    case SaveResult of
+        {ok, []} ->
+            ok = next_task(self()),
+            State#prg_worker_state{process = undefined};
+        {ok, [ContinuationTask | _]} ->
             NewHistory = maps:get(history, Process) ++ Events,
-            ok = continuation_task(self(), {call, undefined}, CallTask),
-            State#prg_worker_state{process = ProcessUpdated#{history => NewHistory}};
-        {error, not_found} ->
-            case operation(Timestamp, Now) of
-                postpone ->
-                    %% save new task as waiting and go to next task
-                    {ok, _} = prg_worker_sidecar:complete_and_continue(Pid, Deadline, StorageOpts, NsId, TaskResult,
-                        ProcessUpdated, Events, NewTask#{status => <<"waiting">>}),
-                    _ = maybe_reply(TaskHeader, Response),
-                    ok = next_task(self()),
-                    State#prg_worker_state{process = undefined};
-                continuation ->
-                    %% save new task as running and try continuation
-                    NextTask0 = NewTask#{status => <<"running">>, running_time => Timestamp},
-                    {ok, NextTaskId} = prg_worker_sidecar:complete_and_continue(Pid, Deadline, StorageOpts, NsId,
-                        TaskResult, ProcessUpdated, Events, NextTask0),
-                    _ = maybe_reply(TaskHeader, Response),
-                    NextTask = NextTask0#{task_id => NextTaskId},
-                    case prg_scheduler:continuation_task(NsId, self(), NextTask) of
-                        ok ->
-                            NewHistory = maps:get(history, Process) ++ Events,
-                            ok = continuation_task(self(), {timeout, undefined}, NextTask),
-                            State#prg_worker_state{process = ProcessUpdated#{history => NewHistory}};
-                        {OtherTaskHeader, OtherTask} ->
-                            ok = process_task(self(), OtherTaskHeader, OtherTask),
-                            State#prg_worker_state{process = undefined}
-                    end
-            end
+            ok = continuation_task(self(), create_header(ContinuationTask), ContinuationTask),
+            State#prg_worker_state{process = ProcessUpdated#{history => NewHistory}}
     end;
 
 %% success result with undefined timer and remove action
@@ -221,7 +194,82 @@ handle_result(
     ok = next_task(self()),
     State#prg_worker_state{process = undefined};
 
-%% success result with unset_timer or undefined action
+%% success result with unset_timer action
+handle_result(
+    {ok, #{events := Events, action := unset_timer} = Result},
+    TaskHeader,
+    #{task_id := TaskId} = _Task,
+    Deadline,
+    State = #prg_worker_state{
+        ns_id = NsId,
+        ns_opts = #{storage := StorageOpts} = NsOpts,
+        process = #{process_id := ProcessId} = Process,
+        sidecar_pid = Pid
+    }
+) ->
+    ok = prg_worker_sidecar:lifecycle_sink(Pid, Deadline, NsOpts, extract_task_type(TaskHeader), ProcessId),
+    ok = prg_worker_sidecar:event_sink(Pid, Deadline, NsOpts, ProcessId, Events),
+    ProcessUpdated = update_process(maps:without([detail,corrupted_by], Process#{status => <<"running">>}), Result),
+    Response = response(maps:get(response, Result, undefined)),
+    TaskResult = #{
+        task_id => TaskId,
+        response => term_to_binary(Response),
+        finished_time => erlang:system_time(second),
+        status => <<"finished">>
+    },
+    SaveResult = prg_worker_sidecar:complete_and_suspend(Pid, Deadline, StorageOpts, NsId, TaskResult,
+        ProcessUpdated, Events),
+    _ = maybe_reply(TaskHeader, Response),
+    case SaveResult of
+        {ok, []} ->
+            ok = next_task(self()),
+            State#prg_worker_state{process = undefined};
+        {ok, [ContinuationTask | _]} ->
+            NewHistory = maps:get(history, Process) ++ Events,
+            ok = continuation_task(self(), create_header(ContinuationTask), ContinuationTask),
+            State#prg_worker_state{process = ProcessUpdated#{history => NewHistory}}
+    end;
+
+%% success repair with corrupted task and undefined action
+handle_result(
+    {ok, #{events := Events} = Result},
+    {repair, _} = TaskHeader,
+    #{task_id := TaskId} = _Task,
+    Deadline,
+    State = #prg_worker_state{
+        ns_id = NsId,
+        ns_opts = #{storage := StorageOpts} = NsOpts,
+        process = #{process_id := ProcessId, corrupted_by := ErrorTaskId} = Process,
+        sidecar_pid = Pid
+    }
+) ->
+    Now = erlang:system_time(second),
+    ok = prg_worker_sidecar:lifecycle_sink(Pid, Deadline, NsOpts, extract_task_type(TaskHeader), ProcessId),
+    ok = prg_worker_sidecar:event_sink(Pid, Deadline, NsOpts, ProcessId, Events),
+    ProcessUpdated = update_process(maps:without([detail,corrupted_by], Process#{status => <<"running">>}), Result),
+    Response = response(maps:get(response, Result, undefined)),
+    TaskResult = #{
+        task_id => TaskId,
+        response => term_to_binary(Response),
+        finished_time => erlang:system_time(second),
+        status => <<"finished">>
+    },
+    {ok, Task} = prg_storage:get_task(StorageOpts, NsId, ErrorTaskId),
+    NewTask0 = maps:with([process_id, task_type, scheduled_time, args, metadata, context], Task),
+    NewTask = NewTask0#{
+        status => <<"running">>,
+        running_time => Now,
+        last_retry_interval => 0,
+        attempts_count => 0
+    },
+    {ok, [ContinuationTask | _]} = prg_worker_sidecar:complete_and_continue(Pid, Deadline, StorageOpts, NsId,
+        TaskResult, ProcessUpdated, Events, NewTask),
+    _ = maybe_reply(TaskHeader, Response),
+    NewHistory = maps:get(history, Process) ++ Events,
+    ok = continuation_task(self(), create_header(ContinuationTask), ContinuationTask),
+    State#prg_worker_state{process = ProcessUpdated#{history => NewHistory}};
+
+%% success result with undefined action
 handle_result(
     {ok, #{events := Events} = Result},
     TaskHeader,
@@ -236,7 +284,7 @@ handle_result(
 ) ->
     ok = prg_worker_sidecar:lifecycle_sink(Pid, Deadline, NsOpts, extract_task_type(TaskHeader), ProcessId),
     ok = prg_worker_sidecar:event_sink(Pid, Deadline, NsOpts, ProcessId, Events),
-    ProcessUpdated = update_process(Process#{status => <<"running">>}, Result),
+    ProcessUpdated = update_process(maps:without([detail,corrupted_by], Process#{status => <<"running">>}), Result),
     Response = response(maps:get(response, Result, undefined)),
     TaskResult = #{
         task_id => TaskId,
@@ -244,17 +292,18 @@ handle_result(
         finished_time => erlang:system_time(second),
         status => <<"finished">>
     },
-    case maps:get(action, Result, undefined) of
-        unset_timer ->
-            ok = prg_worker_sidecar:complete_and_suspend(Pid, Deadline, StorageOpts, NsId, TaskResult,
-                ProcessUpdated, Events);
-        undefined ->
-            ok = prg_worker_sidecar:complete_and_unlock(Pid, Deadline, StorageOpts, NsId, TaskResult,
-                ProcessUpdated, Events)
-    end,
+    SaveResult = prg_worker_sidecar:complete_and_unlock(Pid, Deadline, StorageOpts, NsId, TaskResult,
+        ProcessUpdated, Events),
     _ = maybe_reply(TaskHeader, Response),
-    ok = next_task(self()),
-    State#prg_worker_state{process = undefined};
+    case SaveResult of
+        {ok, []} ->
+            ok = next_task(self()),
+            State#prg_worker_state{process = undefined};
+        {ok, [ContinuationTask | _]} ->
+            NewHistory = maps:get(history, Process) ++ Events,
+            ok = continuation_task(self(), create_header(ContinuationTask), ContinuationTask),
+            State#prg_worker_state{process = ProcessUpdated#{history => NewHistory}}
+    end;
 
 %% calls processing error
 handle_result(
@@ -289,7 +338,7 @@ handle_result(
         status => <<"error">>
     },
     ok = prg_worker_sidecar:complete_and_error(Pid, Deadline, StorageOpts, NsId, TaskResult, ProcessUpdated),
-    _ = maybe_reply(TaskHeader, {error, <<"process is error">>}),
+    _ = maybe_reply(TaskHeader, Response),
     ok = next_task(self()),
     State#prg_worker_state{process = undefined};
 
@@ -315,27 +364,32 @@ handle_result(
     case check_retryable(TaskHeader, Task, RetryPolicy, Reason) of
         not_retryable ->
             Detail = prg_utils:format(Reason),
-            ProcessUpdated = Process#{status => <<"error">>, detail => Detail},
+            ProcessUpdated = Process#{status => <<"error">>, detail => Detail, corrupted_by => TaskId},
             ok = prg_worker_sidecar:lifecycle_sink(Pid, Deadline, NsOpts, {error, Detail}, ProcessId),
             ok = prg_worker_sidecar:complete_and_error(Pid, Deadline, StorageOpts, NsId, TaskResult, ProcessUpdated);
         NewTask ->
-            {ok, _NextTaskId} = prg_worker_sidecar:complete_and_continue(Pid, Deadline, StorageOpts, NsId,
+            {ok, _} = prg_worker_sidecar:complete_and_continue(Pid, Deadline, StorageOpts, NsId,
                 TaskResult, Process, [], NewTask)
     end,
     ok = next_task(self()),
     State#prg_worker_state{process = undefined}.
 
 update_process(Process, Result) ->
-    case Result of
-        #{metadata := Meta, aux_state := AuxState} ->
-            Process#{metadata => Meta, aux_state => AuxState};
-        #{metadata := Meta} ->
-            Process#{metadata => Meta};
-        #{aux_state := AuxState} ->
-            Process#{aux_state => AuxState};
-        _ ->
-            Process
-    end.
+    maps:fold(fun
+        (metadata, Meta, Acc) -> Acc#{metadata => Meta};
+        (aux_state, AuxState, Acc) -> Acc#{aux_state => AuxState};
+        (_, _, Acc) -> Acc
+    end, Process, Result).
+%    case Result of
+%        #{metadata := Meta, aux_state := AuxState} ->
+%            Process#{metadata => Meta, aux_state => AuxState};
+%        #{metadata := Meta} ->
+%            Process#{metadata => Meta};
+%        #{aux_state := AuxState} ->
+%            Process#{aux_state => AuxState};
+%        _ ->
+%            Process
+%    end.
 
 -spec maybe_reply(task_header(), term()) -> term().
 maybe_reply({_, undefined}, _) ->
@@ -385,10 +439,28 @@ is_retryable(Error, {timeout, undefined}, RetryPolicy, Timeout, Attempts) ->
 is_retryable(_Error, _TaskHeader, _RetryPolicy, _Timeout, _Attempts) ->
     false.
 
-operation(Timestamp, Now) when Timestamp =< Now ->
-    continuation;
-operation(_Timestamp, _Now) ->
-    postpone.
+create_status(Timestamp, Now) when Timestamp =< Now ->
+    <<"running">>;
+create_status(_Timestamp, _Now) ->
+    <<"waiting">>.
+
+create_header(#{task_type := <<"timeout">>}) ->
+    {timeout, undefined};
+create_header(#{task_type := <<"call">>}) ->
+    {call, undefined};
+create_header(#{task_type := <<"remove">>}) ->
+    {remove, undefined};
+create_header(#{task_type := <<"init">>}) ->
+    {init, undefined};
+create_header(#{task_type := <<"repair">>}) ->
+    {repair, undefined};
+create_header(#{task_type := <<"notify">>}) ->
+    {notify, undefined}.
+%%
+action_to_task_type(#{remove := true}) ->
+    <<"remove">>;
+action_to_task_type(#{set_timer := _}) ->
+    <<"timeout">>.
 
 maybe_wait_call(undefined) ->
     ok;

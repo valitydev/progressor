@@ -7,7 +7,6 @@
 -export([start_link/1]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2,
     code_change/3]).
--export([handle_continue/2]).
 
 %% API
 -export([push_task/3]).
@@ -53,13 +52,8 @@ init({NsId, #{task_scan_timeout := RescanTimeoutSec} = Opts}) ->
         free_workers = queue:new(),
         rescan_timeout = RescanTimeoutMs
     },
-    {ok, State, {continue, search_tasks}}.
-
-handle_continue(search_tasks, State = #prg_scheduler_state{ns_id = NsId, ns_opts = NsOpts, rescan_timeout = RescanTimeoutMs}) ->
-    Tasks = search_tasks(NsId, NsOpts),
-    NewState = lists:foldl(fun(Task, Acc) -> do_push_task(header(), Task, Acc) end, State, Tasks),
     _ = start_rescan_timer(RescanTimeoutMs),
-    {noreply, NewState}.
+    {ok, State}.
 
 handle_call({pop_task, Worker}, _From, State) ->
     case queue:out(State#prg_scheduler_state.ready) of
@@ -92,13 +86,13 @@ handle_info(
     State = #prg_scheduler_state{ns_id = NsId, ns_opts = NsOpts, free_workers = Workers, rescan_timeout = RescanTimeout}
 ) ->
     NewState =
-        case queue:is_empty(Workers) of
-            true ->
+        case queue:len(Workers) of
+            0 ->
                 %% all workers is busy
                 _ = start_rescan_timer(RescanTimeout),
                 State;
-            false ->
-                Tasks = search_tasks(NsId, NsOpts),
+            N ->
+                Tasks = search_tasks(N, NsId, NsOpts),
                 _ = start_rescan_timer(RescanTimeout),
                 lists:foldl(fun(Task, Acc) -> do_push_task(header(), Task, Acc) end, State, Tasks)
         end,
@@ -124,14 +118,14 @@ start_workers(NsId, NsOpts) ->
     end, lists:seq(1, WorkerPoolSize)).
 
 search_tasks(
+    FreeWorkersCount,
     NsId,
     #{
         storage := StorageOpts,
         process_step_timeout := TimeoutSec,
-        worker_pool_size := PoolSize,
         task_scan_timeout := ScanTimeoutSec}
 ) ->
-    prg_storage:search_tasks(StorageOpts, NsId, TimeoutSec + ScanTimeoutSec, PoolSize).
+    prg_storage:search_tasks(StorageOpts, NsId, TimeoutSec + ScanTimeoutSec, FreeWorkersCount).
 
 do_push_task(TaskHeader, Task, State) ->
     FreeWorkers = State#prg_scheduler_state.free_workers,

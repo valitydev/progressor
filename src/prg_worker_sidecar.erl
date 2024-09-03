@@ -47,16 +47,10 @@ process(Pid, Deadline, NsOpts, Request, Context) ->
     process(),
     [event()],
     task()
-) -> {ok, task_id()}.
+) -> {ok, [task()]} | no_return().
 complete_and_continue(Pid, Deadline, StorageOpts, NsId, TaskResult, Process, Events, Task) ->
     Timeout = Deadline - erlang:system_time(millisecond),
     gen_server:call(Pid, {complete_and_continue, StorageOpts, NsId, TaskResult, Process, Events, Task}, Timeout).
-
--spec remove_process(pid(), timestamp_ms(), storage_opts(), namespace_id(), id()) ->
-    ok | no_return().
-remove_process(Pid, Deadline, StorageOpts, NsId, ProcessId) ->
-    Timeout = Deadline - erlang:system_time(millisecond),
-    gen_server:call(Pid, {remove_process, StorageOpts, NsId, ProcessId}, Timeout).
 
 -spec complete_and_suspend(
     pid(),
@@ -66,7 +60,7 @@ remove_process(Pid, Deadline, StorageOpts, NsId, ProcessId) ->
     task_result(),
     process(),
     [event()]
-) -> ok | no_return().
+) -> {ok, [task()]} | no_return().
 complete_and_suspend(Pid, Deadline, StorageOpts, NsId, TaskResult, Process, Events) ->
     Timeout = Deadline - erlang:system_time(millisecond),
     gen_server:call(Pid, {complete_and_suspend, StorageOpts, NsId, TaskResult, Process, Events}, Timeout).
@@ -79,7 +73,7 @@ complete_and_suspend(Pid, Deadline, StorageOpts, NsId, TaskResult, Process, Even
     task_result(),
     process(),
     [event()]
-) -> ok | no_return().
+) -> {ok, [task()]} | no_return().
 complete_and_unlock(Pid, Deadline, StorageOpts, NsId, TaskResult, Process, Events) ->
     Timeout = Deadline - erlang:system_time(millisecond),
     gen_server:call(Pid, {complete_and_unlock, StorageOpts, NsId, TaskResult, Process, Events}, Timeout).
@@ -89,6 +83,13 @@ complete_and_unlock(Pid, Deadline, StorageOpts, NsId, TaskResult, Process, Event
 complete_and_error(Pid, Deadline, StorageOpts, NsId, TaskResult, Process) ->
     Timeout = Deadline - erlang:system_time(millisecond),
     gen_server:call(Pid, {complete_and_error, StorageOpts, NsId, TaskResult, Process}, Timeout).
+
+-spec remove_process(pid(), timestamp_ms(), storage_opts(), namespace_id(), id()) ->
+    ok | no_return().
+remove_process(Pid, Deadline, StorageOpts, NsId, ProcessId) ->
+    Timeout = Deadline - erlang:system_time(millisecond),
+    gen_server:call(Pid, {remove_process, StorageOpts, NsId, ProcessId}, Timeout).
+
 
 %% notifier wrappers
 
@@ -129,7 +130,7 @@ handle_call(
             {error, _Reason} = ERR -> ERR;
             _Unsupported -> {error, <<"unsupported_result">>}
         catch
-            Class:Term ->
+            Class:Term:_Trace ->
                 {error, {exception, Class, Term}}
         end,
     {reply, Response, State};
@@ -142,6 +143,8 @@ handle_call(
     Fun = fun() ->
         prg_storage:complete_and_continue(StorageOpts, NsId, TaskResult, Process, Events, Task)
     end,
+    %% {Time, Response} = timer:tc(fun() -> do_with_retry(Fun, ?DEFAULT_DELAY) end),
+    %% io:format(user, "TIME: ~p~n", [Time]),
     Response = do_with_retry(Fun, ?DEFAULT_DELAY),
     {reply, Response, State};
 

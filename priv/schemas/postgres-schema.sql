@@ -29,6 +29,15 @@ CREATE TABLE IF NOT EXISTS default_tasks(
     FOREIGN KEY ("process_id") REFERENCES default_processes ("process_id")
 );
 
+ALTER TABLE default_processes ADD COLUMN "corrupted_by" BIGINT REFERENCES default_tasks("task_id");
+
+CREATE TABLE IF NOT EXISTS "default_locks"(
+    "process_id" VARCHAR(80) PRIMARY KEY,
+    "task_id" BIGINT NOT NULL,
+    FOREIGN KEY ("process_id") REFERENCES "default_processes" ("process_id"),
+    FOREIGN KEY ("task_id") REFERENCES "default_tasks" ("task_id")
+);
+
 CREATE TABLE IF NOT EXISTS default_events(
     "process_id" VARCHAR(80) NOT NULL,
     "task_id" BIGINT NOT NULL,
