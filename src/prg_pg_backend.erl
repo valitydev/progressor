@@ -455,11 +455,13 @@ cleanup(#{pool := Pool}, NsId) ->
     ProcessesTable = construct_table_name(NsId, "_processes"),
     EventsTable = construct_table_name(NsId, "_events"),
     TaskTable = construct_table_name(NsId, "_tasks"),
+    LocksTable = construct_table_name(NsId, "_locks"),
     epgsql_pool:transaction(
         Pool,
         fun(Connection) ->
             {ok, _, _} = epgsql_pool:query(Connection, "ALTER TABLE " ++ ProcessesTable ++ " DROP COLUMN corrupted_by"),
             {ok, _, _} = epgsql_pool:query(Connection, "DROP TABLE " ++ EventsTable),
+            {ok, _, _} = epgsql_pool:query(Connection, "DROP TABLE " ++ LocksTable),
             {ok, _, _} = epgsql_pool:query(Connection, "DROP TABLE " ++ TaskTable),
             {ok, _, _} = epgsql_pool:query(Connection, "DROP TABLE " ++ ProcessesTable)
         end
