@@ -380,16 +380,6 @@ update_process(Process, Result) ->
         (aux_state, AuxState, Acc) -> Acc#{aux_state => AuxState};
         (_, _, Acc) -> Acc
     end, Process, Result).
-%    case Result of
-%        #{metadata := Meta, aux_state := AuxState} ->
-%            Process#{metadata => Meta, aux_state => AuxState};
-%        #{metadata := Meta} ->
-%            Process#{metadata => Meta};
-%        #{aux_state := AuxState} ->
-%            Process#{aux_state => AuxState};
-%        _ ->
-%            Process
-%    end.
 
 -spec maybe_reply(task_header(), term()) -> term().
 maybe_reply({_, undefined}, _) ->
