@@ -52,7 +52,8 @@ init({NsId, #{task_scan_timeout := RescanTimeoutSec} = Opts}) ->
         free_workers = queue:new(),
         rescan_timeout = RescanTimeoutMs
     },
-    _ = start_rescan_timer(RescanTimeoutMs),
+    _ = start_rescan_timers(RescanTimeoutMs),
+    _ = start_rescan_calls((RescanTimeoutMs div 3) + 1),
     {ok, State}.
 
 handle_call({pop_task, Worker}, _From, State) ->
@@ -82,21 +83,43 @@ handle_cast(_Request, State = #prg_scheduler_state{}) ->
     {noreply, State}.
 
 handle_info(
-    {timeout, _TimerRef, rescan_timer},
+    {timeout, _TimerRef, rescan_timers},
     State = #prg_scheduler_state{ns_id = NsId, ns_opts = NsOpts, free_workers = Workers, rescan_timeout = RescanTimeout}
 ) ->
     NewState =
         case queue:len(Workers) of
             0 ->
                 %% all workers is busy
-                _ = start_rescan_timer(RescanTimeout),
                 State;
             N ->
-                Tasks = search_tasks(N, NsId, NsOpts),
-                _ = start_rescan_timer(RescanTimeout),
-                lists:foldl(fun(Task, Acc) -> do_push_task(header(), Task, Acc) end, State, Tasks)
+                Calls = search_calls(N, NsId, NsOpts),
+                Timers = search_timers(N - erlang:length(Calls), NsId, NsOpts),
+                Tasks = Calls ++ Timers,
+                lists:foldl(fun(#{task_type := Type} = Task, Acc) ->
+                    do_push_task(header(Type), Task, Acc)
+                end, State, Tasks)
         end,
+    _ = start_rescan_timers(RescanTimeout),
     {noreply, NewState};
+%%
+handle_info(
+    {timeout, _TimerRef, rescan_calls},
+    State = #prg_scheduler_state{ns_id = NsId, ns_opts = NsOpts, free_workers = Workers, rescan_timeout = RescanTimeout}
+) ->
+    NewState =
+        case queue:len(Workers) of
+            0 ->
+                %% all workers is busy
+                State;
+            N ->
+                Calls = search_calls(N, NsId, NsOpts),
+                lists:foldl(fun(#{task_type := Type} = Task, Acc) ->
+                    do_push_task(header(Type), Task, Acc)
+                end, State, Calls)
+        end,
+    _ = start_rescan_calls((RescanTimeout div 3) + 1),
+    {noreply, NewState};
+
 handle_info(_Info, State = #prg_scheduler_state{}) ->
     {noreply, State}.
 
@@ -117,15 +140,24 @@ start_workers(NsId, NsOpts) ->
         supervisor:start_child(WorkerSup, [N])
     end, lists:seq(1, WorkerPoolSize)).
 
-search_tasks(
+search_timers(
     FreeWorkersCount,
     NsId,
     #{
         storage := StorageOpts,
         process_step_timeout := TimeoutSec,
-        task_scan_timeout := ScanTimeoutSec}
+        task_scan_timeout := ScanTimeoutSec
+    }
 ) ->
-    prg_storage:search_tasks(StorageOpts, NsId, TimeoutSec + ScanTimeoutSec, FreeWorkersCount).
+    prg_storage:search_timers(StorageOpts, NsId, TimeoutSec + ScanTimeoutSec, FreeWorkersCount).
+%%
+
+search_calls(
+    FreeWorkersCount,
+    NsId,
+    #{storage := StorageOpts}
+) ->
+    prg_storage:search_calls(StorageOpts, NsId, FreeWorkersCount).
 
 do_push_task(TaskHeader, Task, State) ->
     FreeWorkers = State#prg_scheduler_state.free_workers,
@@ -142,9 +174,17 @@ do_push_task(TaskHeader, Task, State) ->
             }
         end.
 
-start_rescan_timer(RescanTimeoutMs) ->
+start_rescan_timers(RescanTimeoutMs) ->
     RandomDelta = rand:uniform(RescanTimeoutMs div 5),
-    erlang:start_timer(RescanTimeoutMs + RandomDelta, self(), rescan_timer).
+    erlang:start_timer(RescanTimeoutMs + RandomDelta, self(), rescan_timers).
+
+start_rescan_calls(RescanTimeoutMs) ->
+    RandomDelta = rand:uniform(RescanTimeoutMs div 5),
+    erlang:start_timer(RescanTimeoutMs + RandomDelta, self(), rescan_calls).
+%%
 
 header() ->
-    {timeout, undefined}.
+    header(<<"timeout">>).
+
+header(Type) ->
+    {erlang:binary_to_atom(Type), undefined}.

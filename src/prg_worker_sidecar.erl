@@ -143,8 +143,6 @@ handle_call(
     Fun = fun() ->
         prg_storage:complete_and_continue(StorageOpts, NsId, TaskResult, Process, Events, Task)
     end,
-    %% {Time, Response} = timer:tc(fun() -> do_with_retry(Fun, ?DEFAULT_DELAY) end),
-    %% io:format(user, "TIME: ~p~n", [Time]),
     Response = do_with_retry(Fun, ?DEFAULT_DELAY),
     {reply, Response, State};
 

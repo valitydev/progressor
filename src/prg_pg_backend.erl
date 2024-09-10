@@ -15,7 +15,8 @@
 -export([remove_process/3]).
 
 %% Complex operations
--export([search_tasks/4]).
+-export([search_timers/4]).
+-export([search_calls/3]).
 -export([prepare_init/4]).
 -export([prepare_call/4]).
 -export([prepare_repair/4]).
@@ -126,8 +127,8 @@ remove_process(#{pool := Pool}, NsId, ProcessId) ->
     ok.
 
 %% Complex operations
--spec search_tasks(pg_opts(), namespace_id(), timeout_sec(), pos_integer()) -> [task()].
-search_tasks(#{pool := Pool}, NsId, Timeout, Limit) ->
+-spec search_timers(pg_opts(), namespace_id(), timeout_sec(), pos_integer()) -> [task()].
+search_timers(#{pool := Pool}, NsId, Timeout, Limit) ->
     TaskTable = construct_table_name(NsId, "_tasks"),
     LocksTable = construct_table_name(NsId, "_locks"),
     ProcessesTable = construct_table_name(NsId, "_processes"),
@@ -166,8 +167,36 @@ search_tasks(#{pool := Pool}, NsId, Timeout, Limit) ->
                 "), "
                 "t2 AS (INSERT INTO " ++ LocksTable ++ " (process_id, task_id) SELECT process_id, task_id FROM running_tasks "
                 "  ON CONFLICT (process_id) DO NOTHING) " %% zombie timers already lock process
-                "SELECT * FROM running_tasks",
+                "SELECT * FROM running_tasks FOR UPDATE SKIP LOCKED",
                 [Now, TsBackward, Limit]
+            )
+        end
+    ),
+    to_maps(Columns, Rows, fun marshal_task/1).
+%%
+
+-spec search_calls(pg_opts(), namespace_id(), pos_integer()) -> [task()].
+search_calls(#{pool := Pool}, NsId, Limit) ->
+    TaskTable = construct_table_name(NsId, "_tasks"),
+    LocksTable = construct_table_name(NsId, "_locks"),
+    NowSec = erlang:system_time(second),
+    Now = unixtime_to_datetime(NowSec),
+    {ok, Columns, Rows} = _Res = epgsql_pool:transaction(
+        Pool,
+        fun(Connection) ->
+            {ok, _, _} = epgsql_pool:query(
+                Connection,
+                "WITH running_tasks as("
+                "  UPDATE " ++ TaskTable ++ " SET status = 'running', running_time = $1 WHERE task_id IN "
+                "    (SELECT task_id FROM " ++ TaskTable ++ " WHERE "
+                "      (status = 'waiting' AND task_type IN ('init', 'call', 'notify', 'repair')) "
+                "      AND process_id NOT IN (SELECT process_id FROM " ++ TaskTable ++ " WHERE status = 'running')"
+                "      ORDER BY task_id ASC LIMIT $2"
+                "    ) RETURNING * "
+                "), "
+                "t2 AS (INSERT INTO " ++ LocksTable ++ " (process_id, task_id) SELECT process_id, task_id FROM running_tasks) "
+                "SELECT * FROM running_tasks FOR UPDATE SKIP LOCKED",
+                [Now, Limit]
             )
         end
     ),
@@ -429,10 +458,14 @@ db_init(#{pool := Pool}, NsId) ->
                 "FOREIGN KEY (process_id) REFERENCES " ++ ProcessesTable ++ " (process_id), "
                 "FOREIGN KEY (task_id) REFERENCES " ++ TaskTable ++ " (task_id))"
             ),
-            %% create index
+            %% create indexes
             {ok, _, _} = epgsql_pool:query(
                 Connection,
                 "CREATE INDEX IF NOT EXISTS process_idx on " ++ EventsTable ++ " USING HASH (process_id)"
+            ),
+            {ok, _, _} = epgsql_pool:query(
+                Connection,
+                "CREATE INDEX IF NOT EXISTS process_idx on " ++ TaskTable ++ " USING HASH (process_id)"
             ),
             %% create locks table
             {ok, _, _} = epgsql_pool:query(

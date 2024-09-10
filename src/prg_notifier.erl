@@ -10,7 +10,7 @@
 %% internals
 -export([serialize_content/1]).
 
--spec event_sink(namespace_opts(), id(), [event()]) -> ok | no_return().
+-spec event_sink(namespace_opts(), id(), [event()]) -> ok | {error, _Reason} | no_return().
 event_sink(_NsOpts, _ID, []) ->
     ok;
 event_sink(
@@ -27,7 +27,7 @@ event_sink(
 event_sink(_NsOpts, _ID, _Events) ->
     ok.
 
--spec lifecycle_sink(namespace_opts(), task_t() | {error, _Reason}, id()) -> ok | no_return().
+-spec lifecycle_sink(namespace_opts(), task_t() | {error, _Reason}, id()) -> ok | {error, _Reason} | no_return().
 lifecycle_sink(
     #{
         namespace := NS,

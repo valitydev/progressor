@@ -4,7 +4,8 @@
 
 %% Task management
 -export([get_task_result/3]).
--export([search_tasks/4]).
+-export([search_timers/4]).
+-export([search_calls/3]).
 -export([save_task/3]).
 -export([get_task/3]).
 
@@ -63,9 +64,13 @@ remove_process(#{client := prg_pg_backend, options := PgOpts}, NsId, ProcessId) 
     prg_pg_backend:remove_process(PgOpts, NsId, ProcessId).
 
 %% Complex operations
--spec search_tasks(storage_opts(), namespace_id(), timeout_sec(), pos_integer()) -> [task()].
-search_tasks(#{client := prg_pg_backend, options := PgOpts}, NsId, Timeout, Limit) ->
-    prg_pg_backend:search_tasks(PgOpts, NsId, Timeout, Limit).
+-spec search_timers(storage_opts(), namespace_id(), timeout_sec(), pos_integer()) -> [task()].
+search_timers(#{client := prg_pg_backend, options := PgOpts}, NsId, Timeout, Limit) ->
+    prg_pg_backend:search_timers(PgOpts, NsId, Timeout, Limit).
+
+-spec search_calls(storage_opts(), namespace_id(), pos_integer()) -> [task()].
+search_calls(#{client := prg_pg_backend, options := PgOpts}, NsId, Limit) ->
+    prg_pg_backend:search_calls(PgOpts, NsId, Limit).
 
 -spec prepare_init(storage_opts(), namespace_id(), process(), task()) -> {ok, task_id()} | {error, _Reason}.
 prepare_init(#{client := prg_pg_backend, options := PgOpts}, NsId, Process, InitTask) ->
