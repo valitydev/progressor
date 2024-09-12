@@ -150,10 +150,15 @@ search_timers(
     }
 ) ->
     try
-        prg_storage:search_timers(StorageOpts, NsId, TimeoutSec + ScanTimeoutSec, FreeWorkersCount)
+        prg_storage:search_timers(StorageOpts, NsId, TimeoutSec + ScanTimeoutSec, FreeWorkersCount) of
+            Result when is_list(Result) ->
+                Result;
+            Unexpected ->
+                logger:error("search timers error: ~p", [Unexpected]),
+                []
     catch
         Class:Reason:Trace ->
-            logger:error("search timers error: ~p", [[Class, Reason, Trace]]),
+            logger:error("search timers exception: ~p", [[Class, Reason, Trace]]),
             []
     end.
 
@@ -162,11 +167,15 @@ search_calls(
     NsId,
     #{storage := StorageOpts}
 ) ->
-    try
-        prg_storage:search_calls(StorageOpts, NsId, FreeWorkersCount)
+    try prg_storage:search_calls(StorageOpts, NsId, FreeWorkersCount) of
+        Result when is_list(Result) ->
+            Result;
+        Unexpected ->
+            logger:error("search calls error: ~p", [Unexpected]),
+            []
     catch
         Class:Reason:Trace ->
-            logger:error("search calls error: ~p", [[Class, Reason, Trace]]),
+            logger:error("search calls exception: ~p", [[Class, Reason, Trace]]),
             []
     end.
 

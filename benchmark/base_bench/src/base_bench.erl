@@ -19,7 +19,7 @@ start(ProcCount, DurationSec) ->
     gen_server:start_link({local, ?SERVER}, ?MODULE, [ProcCount, DurationSec], []).
 
 init([ProcCount, DurationSec]) ->
-    IDs = start_processes(ProcCount),
+    IDs = start_processes(ProcCount, DurationSec),
     io:format(user, "Started: ~p~n", [calendar:system_time_to_rfc3339(erlang:system_time(second))]),
     erlang:start_timer(DurationSec * 1000, self(), finish),
     {ok, #base_bench_state{ids = IDs, duration = DurationSec}}.
@@ -53,12 +53,12 @@ code_change(_OldVsn, State = #base_bench_state{}, _Extra) ->
 %%% Internal functions
 %%%===================================================================
 
-start_processes(N) ->
-    lists:foldl(fun(_N, Acc) -> [start_process() | Acc] end, [], lists:seq(1, N)).
+start_processes(N, Duration) ->
+    lists:foldl(fun(_N, Acc) -> [start_process(Duration) | Acc] end, [], lists:seq(1, N)).
 
-start_process() ->
+start_process(Duration) ->
     Id = gen_id(),
-    _ = spawn(progressor, init, [#{ns => ?NS, id => Id, args => <<>>}]),
+    _ = spawn(progressor, init, [#{ns => ?NS, id => Id, args => term_to_binary(Duration)}]),
     Id.
 %%
 
