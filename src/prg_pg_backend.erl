@@ -227,23 +227,34 @@ prepare_call(#{pool := Pool}, NsId, ProcessId, Task) ->
     TaskTable = construct_table_name(NsId, "_tasks"),
     LocksTable = construct_table_name(NsId, "_locks"),
     %% TODO optimize request
-    case try_lock_process(Pool, TaskTable, LocksTable, ProcessId, Task) of
-        {ok, TaskId} ->
-            {ok, {continue, TaskId}};
-        error ->
-            do_save_postponed_task(Pool, TaskTable, Task)
-    end.
+    epg_pool:with(
+        Pool,
+        fun(C) ->
+            case try_lock_process(C, TaskTable, LocksTable, ProcessId, Task) of
+                {ok, TaskId} ->
+                    {ok, {continue, TaskId}};
+                error ->
+                    {ok, _, _, [{TaskId}]} = do_save_task(C, TaskTable, Task#{status => <<"waiting">>}),
+                    {ok, {postpone, TaskId}}
+            end
+        end
+    ).
 
 -spec prepare_repair(pg_opts(), namespace_id(), id(), task()) -> {ok, task_id()} | {error, _Reason}.
 prepare_repair(#{pool := Pool}, NsId, ProcessId, RepairTask) ->
     TaskTable = construct_table_name(NsId, "_tasks"),
     LocksTable = construct_table_name(NsId, "_locks"),
-    case try_lock_process(Pool, TaskTable, LocksTable, ProcessId, RepairTask) of
-        {ok, TaskId} ->
-            {ok, TaskId};
-        error ->
-            {error, <<"process is running">>}
-    end.
+    epg_pool:with(
+        Pool,
+        fun(C) ->
+            case try_lock_process(C, TaskTable, LocksTable, ProcessId, RepairTask) of
+                {ok, TaskId} ->
+                    {ok, TaskId};
+                error ->
+                    {error, <<"process is running">>}
+            end
+        end
+    ).
 
 -spec complete_and_continue(pg_opts(), namespace_id(), task_result(), process(), [event()], task()) ->
     {ok, [task()]}.
@@ -361,7 +372,7 @@ db_init(#{pool := Pool}, NsId) ->
     EventsTable = construct_table_name(NsId, "_events"),
     TaskTable = construct_table_name(NsId, "_tasks"),
     LocksTable = construct_table_name(NsId, "_locks"),
-    epg_pool:transaction(
+    {ok, _, _} = epg_pool:transaction(
         Pool,
         fun(Connection) ->
             %% create type process_status if not exists
@@ -496,10 +507,10 @@ cleanup(#{pool := Pool}, NsId) ->
             {ok, _, _} = epg_pool:query(Connection, "DROP TABLE " ++ EventsTable),
             {ok, _, _} = epg_pool:query(Connection, "DROP TABLE " ++ LocksTable),
             {ok, _, _} = epg_pool:query(Connection, "DROP TABLE " ++ TaskTable),
-            {ok, _, _} = epg_pool:query(Connection, "DROP TABLE " ++ ProcessesTable)
+            {ok, _, _} = epg_pool:query(Connection, "DROP TABLE " ++ ProcessesTable),
+            _ = epg_pool:query(Connection, "DROP TYPE task_type, task_status, process_status")
         end
     ),
-    _ = epg_pool:query(Pool, "DROP TYPE task_type, task_status, process_status"),
     ok.
 
 %-endif.
@@ -668,18 +679,19 @@ do_update_task(Connection, TaskTable, Task) ->
         [Status, BlockedTask, TaskId]
     ).
 
-try_lock_process(Pool, TaskTable, LocksTable, ProcessId, Task) ->
+try_lock_process(Connection, TaskTable, LocksTable, ProcessId, Task) ->
     epg_pool:transaction(
-        Pool,
-        fun(Connection) ->
-            {ok, _, _, [{TaskId}]} = do_save_task(Connection, TaskTable, Task),
-            case do_lock_process(Connection, LocksTable, ProcessId, TaskId) of
+        Connection,
+        fun(C) ->
+            {ok, _, _, [{TaskId}]} = do_save_task(C, TaskTable, Task),
+            case do_lock_process(C, LocksTable, ProcessId, TaskId) of
                 {ok, _} ->
-                    {ok, BlockedTaskId} = do_block_timer(Connection, TaskTable, ProcessId),
-                    {ok, _} = do_update_task(Connection, TaskTable, Task#{task_id => TaskId, blocked_task => BlockedTaskId}),
+                    {ok, BlockedTaskId} = do_block_timer(C, TaskTable, ProcessId),
+                    {ok, _} = do_update_task(C, TaskTable, Task#{task_id => TaskId, blocked_task => BlockedTaskId}),
                     {ok, TaskId};
                 {error, #error{codename = unique_violation}} ->
-                        error
+                    %% transaction rolled back
+                    error
             end
         end
     ).
@@ -689,15 +701,6 @@ do_lock_process(Connection, LocksTable, ProcessId, TaskId) ->
         Connection,
         "INSERT INTO " ++ LocksTable ++ " (process_id, task_id) VALUES ($1, $2)",
         [ProcessId, TaskId]
-    ).
-
-do_save_postponed_task(Pool, TaskTable, Task) ->
-    epg_pool:transaction(
-        Pool,
-        fun(Connection) ->
-            {ok, _, _, [{TaskId}]} = do_save_task(Connection, TaskTable, Task#{status => <<"waiting">>}),
-            {ok, {postpone, TaskId}}
-        end
     ).
 
 do_block_timer(Connection, TaskTable, ProcessId) ->
