@@ -149,15 +149,26 @@ search_timers(
         task_scan_timeout := ScanTimeoutSec
     }
 ) ->
-    prg_storage:search_timers(StorageOpts, NsId, TimeoutSec + ScanTimeoutSec, FreeWorkersCount).
-%%
+    try
+        prg_storage:search_timers(StorageOpts, NsId, TimeoutSec + ScanTimeoutSec, FreeWorkersCount)
+    catch
+        Class:Reason:Trace ->
+            logger:error("search timers error: ~p", [[Class, Reason, Trace]]),
+            []
+    end.
 
 search_calls(
     FreeWorkersCount,
     NsId,
     #{storage := StorageOpts}
 ) ->
-    prg_storage:search_calls(StorageOpts, NsId, FreeWorkersCount).
+    try
+        prg_storage:search_calls(StorageOpts, NsId, FreeWorkersCount)
+    catch
+        Class:Reason:Trace ->
+            logger:error("search calls error: ~p", [[Class, Reason, Trace]]),
+            []
+    end.
 
 do_push_task(TaskHeader, Task, State) ->
     FreeWorkers = State#prg_scheduler_state.free_workers,

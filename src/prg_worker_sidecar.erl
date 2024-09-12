@@ -128,9 +128,12 @@ handle_call(
         try Handler:process(Request, Options, Ctx) of
             {ok, _Result} = OK -> OK;
             {error, _Reason} = ERR -> ERR;
-            _Unsupported -> {error, <<"unsupported_result">>}
+            Unsupported ->
+                logger:error("processor unexpected result: ~p", [Unsupported]),
+                {error, <<"unsupported_result">>}
         catch
-            Class:Term:_Trace ->
+            Class:Term:Trace ->
+                logger:error("processor exception: ~p", [[Class, Term, Trace]]),
                 {error, {exception, Class, Term}}
         end,
     {reply, Response, State};
@@ -222,15 +225,13 @@ do_with_retry(Fun, Delay) ->
             Result;
         {ok, _} = Result ->
             Result;
-        _Error ->
-            io:format(user, "ERROR: ~p~n", [_Error]),
-            %% TODO log
+        Error ->
+            _ = logger:error("result processing error: ~p", [Error]),
             timer:sleep(Delay),
             do_with_retry(Fun, Delay)
     catch
-        _Class:_Error ->
-            io:format(user, "EXCEPTION: ~p~n", [[_Class, _Error]]),
-            %% TODO log
+        Class:Error:Trace ->
+            _ = logger:error("result processing exception: ~p", [[Class, Error, Trace]]),
             timer:sleep(Delay),
             do_with_retry(Fun, Delay)
     end.

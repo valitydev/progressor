@@ -71,7 +71,7 @@ save_task(#{pool := Pool}, NsId, Task) ->
 -spec get_process_status(pg_opts(), namespace_id(), id()) -> term().
 get_process_status(#{pool := Pool}, NsId, Id) ->
     Table = construct_table_name(NsId, "_processes"),
-    {ok, _Columns, Rows} = epgsql_pool:query(
+    {ok, _Columns, Rows} = epg_pool:query(
         Pool,
         "SELECT status from " ++ Table ++ " WHERE process_id = $1",
         [Id]
@@ -87,7 +87,7 @@ get_process(#{pool := Pool}, NsId, ProcessId, HistoryRange) ->
     ProcessesTable = construct_table_name(NsId, "_processes"),
     RangeCondition = create_range_condition(HistoryRange),
     %% TODO optimize request
-    {ok, Columns, Rows} = epgsql_pool:query(
+    {ok, Columns, Rows} = epg_pool:query(
         Pool,
         "SELECT pr.process_id, pr.status, pr.detail, pr.aux_state, pr.metadata as p_meta, pr.corrupted_by,"
         "    ev.event_id, ev.timestamp, ev.metadata, ev.payload "
@@ -115,13 +115,13 @@ remove_process(#{pool := Pool}, NsId, ProcessId) ->
     TaskTable = construct_table_name(NsId, "_tasks"),
     EventsTable = construct_table_name(NsId, "_events"),
     ProcessesTable = construct_table_name(NsId, "_processes"),
-    epgsql_pool:transaction(
+    epg_pool:transaction(
         Pool,
         fun(Connection) ->
-            {ok, _L} = epgsql_pool:query(Connection, "DELETE FROM " ++ LocksTable ++ " WHERE process_id = $1", [ProcessId]),
-            {ok, _E} = epgsql_pool:query(Connection, "DELETE FROM " ++ EventsTable ++ " WHERE process_id = $1", [ProcessId]),
-            {ok, _T} = epgsql_pool:query(Connection, "DELETE FROM " ++ TaskTable ++ " WHERE process_id = $1", [ProcessId]),
-            {ok, _P} = epgsql_pool:query(Connection, "DELETE FROM " ++ ProcessesTable ++ " WHERE process_id = $1", [ProcessId])
+            {ok, _L} = epg_pool:query(Connection, "DELETE FROM " ++ LocksTable ++ " WHERE process_id = $1", [ProcessId]),
+            {ok, _E} = epg_pool:query(Connection, "DELETE FROM " ++ EventsTable ++ " WHERE process_id = $1", [ProcessId]),
+            {ok, _T} = epg_pool:query(Connection, "DELETE FROM " ++ TaskTable ++ " WHERE process_id = $1", [ProcessId]),
+            {ok, _P} = epg_pool:query(Connection, "DELETE FROM " ++ ProcessesTable ++ " WHERE process_id = $1", [ProcessId])
         end
     ),
     ok.
@@ -135,12 +135,12 @@ search_timers(#{pool := Pool}, NsId, Timeout, Limit) ->
     NowSec = erlang:system_time(second),
     Now = unixtime_to_datetime(NowSec),
     TsBackward = unixtime_to_datetime(NowSec - (Timeout + ?PROTECT_TIMEOUT)),
-    {ok, Columns, Rows} = _Res = epgsql_pool:transaction(
+    {ok, Columns, Rows} = _Res = epg_pool:transaction(
         Pool,
         fun(Connection) ->
             %% TODO maybe separated process for zombie collection
             %% zombie task with type init, call, notify, repair change status to error, and change process status to error
-            {ok, _} = epgsql_pool:query(
+            {ok, _} = epg_pool:query(
                 Connection,
                 "WITH zombie_tasks as ("
                 "  UPDATE " ++ TaskTable ++ " SET status = 'error'"
@@ -152,7 +152,7 @@ search_timers(#{pool := Pool}, NsId, Timeout, Limit) ->
                 "WHERE process_id IN (SELECT process_id FROM zombie_tasks)",
                 [TsBackward]
             ),
-            {ok, _, _} = epgsql_pool:query(
+            {ok, _, _} = epg_pool:query(
                 %% timeout tasks
                 Connection,
                 "WITH running_tasks as("
@@ -167,7 +167,7 @@ search_timers(#{pool := Pool}, NsId, Timeout, Limit) ->
                 "), "
                 "t2 AS (INSERT INTO " ++ LocksTable ++ " (process_id, task_id) SELECT process_id, task_id FROM running_tasks "
                 "  ON CONFLICT (process_id) DO NOTHING) " %% zombie timers already lock process
-                "SELECT * FROM running_tasks FOR UPDATE SKIP LOCKED",
+                "SELECT * FROM running_tasks",
                 [Now, TsBackward, Limit]
             )
         end
@@ -181,10 +181,10 @@ search_calls(#{pool := Pool}, NsId, Limit) ->
     LocksTable = construct_table_name(NsId, "_locks"),
     NowSec = erlang:system_time(second),
     Now = unixtime_to_datetime(NowSec),
-    {ok, Columns, Rows} = _Res = epgsql_pool:transaction(
+    {ok, Columns, Rows} = _Res = epg_pool:transaction(
         Pool,
         fun(Connection) ->
-            {ok, _, _} = epgsql_pool:query(
+            {ok, _, _} = epg_pool:query(
                 Connection,
                 "WITH running_tasks as("
                 "  UPDATE " ++ TaskTable ++ " SET status = 'running', running_time = $1 WHERE task_id IN "
@@ -195,7 +195,7 @@ search_calls(#{pool := Pool}, NsId, Limit) ->
                 "    ) RETURNING * "
                 "), "
                 "t2 AS (INSERT INTO " ++ LocksTable ++ " (process_id, task_id) SELECT process_id, task_id FROM running_tasks) "
-                "SELECT * FROM running_tasks FOR UPDATE SKIP LOCKED",
+                "SELECT * FROM running_tasks",
                 [Now, Limit]
             )
         end
@@ -207,7 +207,7 @@ prepare_init(#{pool := Pool}, NsId, #{process_id := ProcessId} = Process, InitTa
     ProcessesTable = construct_table_name(NsId, "_processes"),
     TaskTable = construct_table_name(NsId, "_tasks"),
     LocksTable = construct_table_name(NsId, "_locks"),
-    epgsql_pool:transaction(
+    epg_pool:transaction(
         Pool,
         fun(Connection) ->
             case do_save_process(Connection, ProcessesTable, Process) of
@@ -256,7 +256,7 @@ complete_and_continue(#{pool := Pool}, NsId, TaskResult, Process, Events, NextTa
     #{task_id := TaskId} = TaskResult,
     #{process_id := ProcessId} = Process,
     %% TODO optimize request
-    epgsql_pool:transaction(
+    epg_pool:transaction(
         Pool,
         fun(Connection) ->
             {ok, _} = do_update_process(Connection, ProcessesTable, Process),
@@ -294,7 +294,7 @@ complete_and_suspend(#{pool := Pool}, NsId, TaskResult, Process, Events) ->
     #{task_id := TaskId} = TaskResult,
     #{process_id := ProcessId} = Process,
     %% TODO optimize request
-    {ok, Columns, Rows} = epgsql_pool:transaction(
+    {ok, Columns, Rows} = epg_pool:transaction(
         Pool,
         fun(Connection) ->
             {ok, _} = do_update_process(Connection, ProcessesTable, Process),
@@ -314,7 +314,7 @@ complete_and_error(#{pool := Pool}, NsId, TaskResult, Process) ->
     LocksTable = construct_table_name(NsId, "_locks"),
     #{process_id := ProcessId} = Process,
     %% TODO optimize request
-    epgsql_pool:transaction(
+    epg_pool:transaction(
         Pool,
         fun(Connection) ->
             {ok, _} = do_update_process(Connection, ProcessesTable, Process),
@@ -336,7 +336,7 @@ complete_and_unlock(#{pool := Pool}, NsId, TaskResult, Process, Events) ->
     #{task_id := TaskId} = TaskResult,
     #{process_id := ProcessId} = Process,
     %% TODO optimize request
-    {ok, Columns, Rows} = epgsql_pool:transaction(
+    {ok, Columns, Rows} = epg_pool:transaction(
         Pool,
         fun(Connection) ->
             {ok, _} = do_update_process(Connection, ProcessesTable, Process),
@@ -361,11 +361,11 @@ db_init(#{pool := Pool}, NsId) ->
     EventsTable = construct_table_name(NsId, "_events"),
     TaskTable = construct_table_name(NsId, "_tasks"),
     LocksTable = construct_table_name(NsId, "_locks"),
-    epgsql_pool:transaction(
+    epg_pool:transaction(
         Pool,
         fun(Connection) ->
             %% create type process_status if not exists
-            {ok, _, [{IsProcessStatusExists}]} = epgsql_pool:query(
+            {ok, _, [{IsProcessStatusExists}]} = epg_pool:query(
                 Connection,
                 "select exists (select 1 from pg_type where typname = 'process_status')"
             ),
@@ -373,13 +373,13 @@ db_init(#{pool := Pool}, NsId) ->
                 true ->
                     ok;
                 false ->
-                    {ok, _, _} = epgsql_pool:query(
+                    {ok, _, _} = epg_pool:query(
                         Connection,
                         "CREATE TYPE process_status AS ENUM ('running', 'error')"
                     )
             end,
             %% create type task_status if not exists
-            {ok, _, [{IsTaskStatusExists}]} = epgsql_pool:query(
+            {ok, _, [{IsTaskStatusExists}]} = epg_pool:query(
                 Connection,
                 "select exists (select 1 from pg_type where typname = 'task_status')"
             ),
@@ -387,14 +387,14 @@ db_init(#{pool := Pool}, NsId) ->
                 true ->
                     ok;
                 false ->
-                    {ok, _, _} = epgsql_pool:query(
+                    {ok, _, _} = epg_pool:query(
                         Connection,
                         "CREATE TYPE task_status AS ENUM "
                         "('waiting', 'running', 'blocked', 'error', 'finished', 'cancelled')"
                     )
             end,
             %% create type task_type if not exists
-            {ok, _, [{IsTaskTypeExists}]} = epgsql_pool:query(
+            {ok, _, [{IsTaskTypeExists}]} = epg_pool:query(
                 Connection,
                 "select exists (select 1 from pg_type where typname = 'task_type')"
             ),
@@ -402,13 +402,13 @@ db_init(#{pool := Pool}, NsId) ->
                 true ->
                     ok;
                 false ->
-                    {ok, _, _} = epgsql_pool:query(
+                    {ok, _, _} = epg_pool:query(
                         Connection,
                         "CREATE TYPE task_type AS ENUM ('init', 'timeout', 'call', 'notify', 'repair', 'remove')"
                     )
             end,
             %% create processes table
-            {ok, _, _} = epgsql_pool:query(
+            {ok, _, _} = epg_pool:query(
                 Connection,
                 "CREATE TABLE IF NOT EXISTS " ++ ProcessesTable ++ " ("
                 "process_id VARCHAR(80) PRIMARY KEY, "
@@ -418,7 +418,7 @@ db_init(#{pool := Pool}, NsId) ->
                 "metadata JSONB)"
             ),
             %% create tasks table
-            {ok, _, _} = epgsql_pool:query(
+            {ok, _, _} = epg_pool:query(
                 Connection,
                 "CREATE TABLE IF NOT EXISTS " ++ TaskTable ++ " ("
                 "task_id BIGSERIAL PRIMARY KEY, "
@@ -439,13 +439,13 @@ db_init(#{pool := Pool}, NsId) ->
                 "FOREIGN KEY (process_id) REFERENCES " ++ ProcessesTable ++ " (process_id))"
             ),
             %% create constraint for process error cause
-            {ok, _, _} = epgsql_pool:query(
+            {ok, _, _} = epg_pool:query(
                 Connection,
                 "ALTER TABLE " ++ ProcessesTable ++
                 " ADD COLUMN IF NOT EXISTS corrupted_by BIGINT REFERENCES " ++ TaskTable ++ "(task_id)"
             ),
             %% create events table
-            {ok, _, _} = epgsql_pool:query(
+            {ok, _, _} = epg_pool:query(
                 Connection,
                 "CREATE TABLE IF NOT EXISTS " ++ EventsTable ++ " ("
                 "process_id VARCHAR(80) NOT NULL, "
@@ -459,16 +459,16 @@ db_init(#{pool := Pool}, NsId) ->
                 "FOREIGN KEY (task_id) REFERENCES " ++ TaskTable ++ " (task_id))"
             ),
             %% create indexes
-            {ok, _, _} = epgsql_pool:query(
+            {ok, _, _} = epg_pool:query(
                 Connection,
                 "CREATE INDEX IF NOT EXISTS process_idx on " ++ EventsTable ++ " USING HASH (process_id)"
             ),
-            {ok, _, _} = epgsql_pool:query(
+            {ok, _, _} = epg_pool:query(
                 Connection,
                 "CREATE INDEX IF NOT EXISTS process_idx on " ++ TaskTable ++ " USING HASH (process_id)"
             ),
             %% create locks table
-            {ok, _, _} = epgsql_pool:query(
+            {ok, _, _} = epg_pool:query(
                 Connection,
                 "CREATE TABLE IF NOT EXISTS " ++ LocksTable ++ " ("
                 "process_id VARCHAR(80) PRIMARY KEY, "
@@ -489,17 +489,17 @@ cleanup(#{pool := Pool}, NsId) ->
     EventsTable = construct_table_name(NsId, "_events"),
     TaskTable = construct_table_name(NsId, "_tasks"),
     LocksTable = construct_table_name(NsId, "_locks"),
-    epgsql_pool:transaction(
+    epg_pool:transaction(
         Pool,
         fun(Connection) ->
-            {ok, _, _} = epgsql_pool:query(Connection, "ALTER TABLE " ++ ProcessesTable ++ " DROP COLUMN corrupted_by"),
-            {ok, _, _} = epgsql_pool:query(Connection, "DROP TABLE " ++ EventsTable),
-            {ok, _, _} = epgsql_pool:query(Connection, "DROP TABLE " ++ LocksTable),
-            {ok, _, _} = epgsql_pool:query(Connection, "DROP TABLE " ++ TaskTable),
-            {ok, _, _} = epgsql_pool:query(Connection, "DROP TABLE " ++ ProcessesTable)
+            {ok, _, _} = epg_pool:query(Connection, "ALTER TABLE " ++ ProcessesTable ++ " DROP COLUMN corrupted_by"),
+            {ok, _, _} = epg_pool:query(Connection, "DROP TABLE " ++ EventsTable),
+            {ok, _, _} = epg_pool:query(Connection, "DROP TABLE " ++ LocksTable),
+            {ok, _, _} = epg_pool:query(Connection, "DROP TABLE " ++ TaskTable),
+            {ok, _, _} = epg_pool:query(Connection, "DROP TABLE " ++ ProcessesTable)
         end
     ),
-    _ = epgsql_pool:query(Pool, "DROP TYPE task_type, task_status, process_status"),
+    _ = epg_pool:query(Pool, "DROP TYPE task_type, task_status, process_status"),
     ok.
 
 %-endif.
@@ -526,7 +526,7 @@ do_save_process(Connection, Table, Process) ->
     Detail = maps:get(detail, Process, null),
     AuxState = maps:get(aux_state, Process, null),
     Meta = maps:get(metadata, Process, null),
-    epgsql_pool:query(
+    epg_pool:query(
         Connection,
         "INSERT INTO " ++ Table ++ " (process_id, status, detail, aux_state, metadata) VALUES ($1, $2, $3, $4, $5)",
         [ProcessId, Status, Detail, AuxState, json_encode(Meta)]
@@ -551,7 +551,7 @@ do_save_task(Connection, Table, Task, Returning) ->
     RunningTs = maps:get(running_time, Task, null),
     Response = maps:get(response, Task, null),
     Context = maps:get(context, Task, <<>>),
-    epgsql_pool:query(
+    epg_pool:query(
         Connection,
         "INSERT INTO " ++ Table ++ " "
         "  (process_id, task_type, status, scheduled_time, running_time, args, "
@@ -564,20 +564,20 @@ do_save_task(Connection, Table, Task, Returning) ->
     ).
 
 do_get_task_result(Connection, Table, {idempotency_key, IdempotencyKey}) ->
-    epgsql_pool:query(
+    epg_pool:query(
         Connection,
         "SELECT response FROM " ++ Table ++ " WHERE idempotency_key = $1",
         [IdempotencyKey]
     );
 do_get_task_result(Connection, Table, {task_id, TaskId}) ->
-    epgsql_pool:query(
+    epg_pool:query(
         Connection,
         "SELECT response FROM " ++ Table ++ " WHERE task_id = $1",
         [TaskId]
     ).
 
 do_get_task(Connection, Table, TaskId) ->
-    epgsql_pool:query(
+    epg_pool:query(
         Connection,
         "SELECT * FROM " ++ Table ++ " WHERE task_id = $1",
         [TaskId]
@@ -592,7 +592,7 @@ do_update_process(Connection, ProcessesTable, Process) ->
     AuxState = maps:get(aux_state, Process, null),
     MetaData = maps:get(metadata, Process, null),
     CorruptedBy = maps:get(corrupted_by, Process, null),
-    epgsql_pool:query(
+    epg_pool:query(
         Connection,
         "UPDATE " ++ ProcessesTable ++ " SET status = $1, detail = $2, aux_state = $3, metadata = $4, corrupted_by = $5 "
         "WHERE process_id = $6",
@@ -606,7 +606,7 @@ do_save_event(Connection, EventsTable, ProcessId, TaskId, Event) ->
         payload := Payload
     } = Event,
     MetaData = maps:get(metadata, Event, null),
-    epgsql_pool:query(
+    epg_pool:query(
         Connection,
         "INSERT INTO " ++ EventsTable ++ " (process_id, task_id, event_id, timestamp, payload, metadata) "
         "VALUES ($1, $2, $3, $4, $5, $6)",
@@ -621,7 +621,7 @@ do_complete_task(Connection, TaskTable, LocksTable, TaskResult) ->
     } = TaskResult,
     Response = maps:get(response, TaskResult, null),
     FinishedTime = maps:get(finished_time, TaskResult, null),
-    {ok, _} = epgsql_pool:query(
+    {ok, _} = epg_pool:query(
         Connection,
         %% save task result
         "WITH completed_tasks as ("
@@ -638,7 +638,7 @@ do_complete_task(Connection, TaskTable, LocksTable, TaskResult) ->
             {ok, [], []};
         _ ->
             RunningTime = erlang:system_time(second),
-            epgsql_pool:query(
+            epg_pool:query(
                 Connection,
                 %% search postponed call
                 "WITH postponed_tasks AS ("
@@ -661,7 +661,7 @@ do_update_task(Connection, TaskTable, Task) ->
         status := Status
     } = Task,
     BlockedTask = maps:get(blocked_task, Task, null),
-    epgsql_pool:query(
+    epg_pool:query(
         Connection,
         "UPDATE " ++ TaskTable ++ " SET status = $1, blocked_task = $2 "
         "WHERE task_id = $3",
@@ -669,7 +669,7 @@ do_update_task(Connection, TaskTable, Task) ->
     ).
 
 try_lock_process(Pool, TaskTable, LocksTable, ProcessId, Task) ->
-    epgsql_pool:transaction(
+    epg_pool:transaction(
         Pool,
         fun(Connection) ->
             {ok, _, _, [{TaskId}]} = do_save_task(Connection, TaskTable, Task),
@@ -685,24 +685,23 @@ try_lock_process(Pool, TaskTable, LocksTable, ProcessId, Task) ->
     ).
 
 do_lock_process(Connection, LocksTable, ProcessId, TaskId) ->
-    epgsql_pool:query(
+    epg_pool:query(
         Connection,
         "INSERT INTO " ++ LocksTable ++ " (process_id, task_id) VALUES ($1, $2)",
         [ProcessId, TaskId]
     ).
 
 do_save_postponed_task(Pool, TaskTable, Task) ->
-    epgsql_pool:transaction(
+    epg_pool:transaction(
         Pool,
         fun(Connection) ->
-            {ok, _, _, [{TaskId}]} = do_save_task(Connection, TaskTable, Task),
-            {ok, _} = do_update_task(Connection, TaskTable, Task#{task_id => TaskId, status => <<"waiting">>}),
+            {ok, _, _, [{TaskId}]} = do_save_task(Connection, TaskTable, Task#{status => <<"waiting">>}),
             {ok, {postpone, TaskId}}
         end
     ).
 
 do_block_timer(Connection, TaskTable, ProcessId) ->
-    {ok, _, _Columns, Rows} = epgsql_pool:query(
+    {ok, _, _Columns, Rows} = epg_pool:query(
         Connection,
         "UPDATE " ++ TaskTable ++ " SET status = 'blocked' WHERE task_type IN ('timeout', 'remove') AND "
         "process_id = $1 AND status = 'waiting' RETURNING task_id",
@@ -714,7 +713,7 @@ do_block_timer(Connection, TaskTable, ProcessId) ->
     end.
 %%
 do_unlock_timer(Connection, TaskTable, ProcessId) ->
-    epgsql_pool:query(
+    epg_pool:query(
         Connection,
         "UPDATE " ++ TaskTable ++ " SET status = 'waiting' "
         "WHERE process_id = $1 AND status = 'blocked'",
@@ -722,7 +721,7 @@ do_unlock_timer(Connection, TaskTable, ProcessId) ->
     ).
 %%
 do_cancel_timer(Connection, TaskTable, ProcessId) ->
-    epgsql_pool:query(
+    epg_pool:query(
         Connection,
         "UPDATE " ++ TaskTable ++ " SET status = 'cancelled' "
         "WHERE process_id = $1 AND task_type IN ('timeout', 'remove') AND (status = 'waiting' OR status = 'blocked')",
@@ -730,26 +729,12 @@ do_cancel_timer(Connection, TaskTable, ProcessId) ->
     ).
 %%
 do_cancel_waiting_calls(Connection, TaskTable, ProcessId) ->
-    epgsql_pool:query(
+    epg_pool:query(
         Connection,
         "UPDATE " ++ TaskTable ++ " SET status = 'cancelled' "
         "WHERE process_id = $1 AND task_type NOT IN ('timeout', 'remove') AND status = 'waiting'",
         [ProcessId]
     ).
-
-%do_block_error_timer(Connection, TaskTable, ProcessId) ->
-%    {ok, _, _Columns, Rows} = epgsql_pool:query(
-%        Connection,
-%        "UPDATE " ++ TaskTable ++ " SET status = 'blocked' WHERE task_id IN "
-%        "  (SELECT task_id FROM " ++ TaskTable ++ " WHERE process_id = $1 AND status = 'error' AND task_type IN ('timeout', 'remove') "
-%        "   ORDER BY task_id DESC LIMIT 1) "
-%        "RETURNING task_id",
-%        [ProcessId]
-%    ),
-%    case Rows of
-%        [] -> {ok, null};
-%        [{TaskId}] -> {ok, TaskId}
-%    end.
 
 to_maps(Columns, Rows, TransformRowFun) ->
     ColNumbers = erlang:length(Columns),
