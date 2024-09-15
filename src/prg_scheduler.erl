@@ -15,6 +15,9 @@
 
 -record(prg_scheduler_state, {ns_id, ns_opts, ready, free_workers, rescan_timeout}).
 
+-dialyzer({nowarn_function, search_timers/3}).
+-dialyzer({nowarn_function, search_calls/3}).
+
 %%%
 %%% API
 %%%

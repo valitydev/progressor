@@ -28,6 +28,7 @@
 
 -define(DEFAULT_DELAY, 3000).
 
+-dialyzer({nowarn_function, do_with_retry/2}).
 %% API
 
 %% processor wrapper

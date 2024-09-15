@@ -64,11 +64,12 @@ remove_process(#{client := prg_pg_backend, options := PgOpts}, NsId, ProcessId) 
     prg_pg_backend:remove_process(PgOpts, NsId, ProcessId).
 
 %% Complex operations
--spec search_timers(storage_opts(), namespace_id(), timeout_sec(), pos_integer()) -> [task()].
+-spec search_timers(storage_opts(), namespace_id(), timeout_sec(), pos_integer()) ->
+    [task()] | {error, _Reason}.
 search_timers(#{client := prg_pg_backend, options := PgOpts}, NsId, Timeout, Limit) ->
     prg_pg_backend:search_timers(PgOpts, NsId, Timeout, Limit).
 
--spec search_calls(storage_opts(), namespace_id(), pos_integer()) -> [task()].
+-spec search_calls(storage_opts(), namespace_id(), pos_integer()) -> [task()] | {error, _Reason}.
 search_calls(#{client := prg_pg_backend, options := PgOpts}, NsId, Limit) ->
     prg_pg_backend:search_calls(PgOpts, NsId, Limit).
 

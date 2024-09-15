@@ -279,7 +279,12 @@ complete_and_continue(#{pool := Pool}, NsId, TaskResult, Process, Events, NextTa
                 {ok, _, []} ->
                     case NextTask of
                         #{status := <<"running">>} ->
-                            {ok, _, Columns, Rows} = do_save_task(Connection, TaskTable, NextTask, " * "),
+                            {ok, _, Columns, Rows} = do_save_task(
+                                Connection,
+                                TaskTable,
+                                NextTask#{running_time => erlang:system_time(second)},
+                                " * "
+                            ),
                             [#{task_id := NextTaskId} | _] = Marshaled = to_maps(Columns, Rows, fun marshal_task/1),
                             {ok, _} = do_lock_process(Connection, LocksTable, ProcessId, NextTaskId),
                             {ok, Marshaled};
