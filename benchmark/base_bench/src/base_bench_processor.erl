@@ -12,8 +12,8 @@ process({init, Args, _Process}, _Opts, _Ctx) ->
     {ok, Result};
 %%
 process({timeout, _Args, #{history := History, metadata := Meta} = _Process}, _Opts, _Ctx) ->
-    Random = rand:uniform(40),
-    timer:sleep(60 + Random),
+    %Random = rand:uniform(40),
+    %timer:sleep(60 + Random),
     #{finish := FinishTime} = Meta,
     Action = case FinishTime > erlang:system_time(second) of
         true -> #{set_timer => erlang:system_time(second)};

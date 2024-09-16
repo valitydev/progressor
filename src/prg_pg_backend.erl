@@ -162,6 +162,7 @@ search_timers(#{pool := Pool}, NsId, Timeout, Limit) ->
                 "      (status = 'waiting' AND scheduled_time <= $1 AND task_type IN ('timeout', 'remove')) "
                        %% condition for zombie timeout tasks
                 "      OR (status = 'running' AND running_time < $2 AND task_type IN ('timeout', 'remove')) "
+                "      OR (status = 'running' AND running_time IS NULL AND scheduled_time < $2 AND task_type IN ('timeout', 'remove')) "
                 "      ORDER BY scheduled_time ASC LIMIT $3"
                 "    ) RETURNING * "
                 "), "
