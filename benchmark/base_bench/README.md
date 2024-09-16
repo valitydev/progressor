@@ -1,9 +1,8 @@
 base_bench
 =====
 
-An OTP application
+```
+$ rebar3 shell
 
-Build
------
-
-    $ rebar3 compile
+1> base_bench:start(ProcessCount, Duration).
+```
