@@ -58,21 +58,43 @@ handle_continue(do_start, State = #prg_worker_state{ns_id = NsId}) ->
 handle_call(_Request, _From, State = #prg_worker_state{}) ->
     {reply, ok, State}.
 
-handle_cast({process_task, TaskHeader, Task}, State = #prg_worker_state{ns_id = NsId, ns_opts = NsOpts}) ->
-    StorageOpts = maps:get(storage, NsOpts),
-    {ok, Process} = prg_storage:get_process(StorageOpts, NsId, maps:get(process_id, Task)),
-    NewState = do_process_task(TaskHeader, Task, State#prg_worker_state{process = Process}),
+handle_cast(
+    {process_task, TaskHeader, Task},
+    State = #prg_worker_state{
+        ns_id = NsId,
+        ns_opts = #{storage := StorageOpts, process_step_timeout := TimeoutSec} = _NsOpts,
+        sidecar_pid = Pid
+    }
+) ->
+    Deadline = erlang:system_time(millisecond) + TimeoutSec * 1000,
+    ProcessId = maps:get(process_id, Task),
+    {ok, Process} = prg_worker_sidecar:get_process(Pid, Deadline, StorageOpts, NsId, ProcessId),
+    NewState = do_process_task(TaskHeader, Task, Deadline, State#prg_worker_state{process = Process}),
     {noreply, NewState};
-handle_cast({continuation_task, TaskHeader, Task}, State = #prg_worker_state{}) ->
-    NewState = do_process_task(TaskHeader, Task, State),
+handle_cast(
+    {continuation_task, TaskHeader, Task},
+    State = #prg_worker_state{
+            ns_opts = #{process_step_timeout := TimeoutSec}
+    }
+) ->
+    Deadline = erlang:system_time(millisecond) + TimeoutSec * 1000,
+    NewState = do_process_task(TaskHeader, Task, Deadline, State),
     {noreply, NewState};
-handle_cast(next_task, State = #prg_worker_state{ns_id = NsId, ns_opts = NsOpts}) ->
+handle_cast(
+    next_task,
+    State = #prg_worker_state{
+        ns_id = NsId,
+        ns_opts = #{storage := StorageOpts, process_step_timeout := TimeoutSec},
+        sidecar_pid = Pid
+    }
+) ->
     NewState =
         case prg_scheduler:pop_task(NsId, self()) of
             {TaskHeader, Task} ->
-                StorageOpts = maps:get(storage, NsOpts),
-                {ok, Process} = prg_storage:get_process(StorageOpts, NsId, maps:get(process_id, Task)),
-                do_process_task(TaskHeader, Task, State#prg_worker_state{process = Process});
+                Deadline = erlang:system_time(millisecond) + TimeoutSec * 1000,
+                ProcessId = maps:get(process_id, Task),
+                {ok, Process} = prg_worker_sidecar:get_process(Pid, Deadline, StorageOpts, NsId, ProcessId),
+                do_process_task(TaskHeader, Task, Deadline, State#prg_worker_state{process = Process});
             not_found ->
                 State
         end,
@@ -95,22 +117,25 @@ code_change(_OldVsn, State = #prg_worker_state{}, _Extra) ->
 do_process_task(
     _TaskHeader,
     #{task_type := <<"remove">>} = _Task,
+    Deadline,
     State = #prg_worker_state{
         ns_id = NsId,
-        ns_opts = #{storage := StorageOpts, process_step_timeout := TimeoutSec} = NsOpts,
+        ns_opts = #{storage := StorageOpts} = NsOpts,
         process = #{process_id := ProcessId} = _Process,
         sidecar_pid = Pid
     }
 ) ->
-    Deadline = erlang:system_time(millisecond) + TimeoutSec * 1000,
     ok = prg_worker_sidecar:lifecycle_sink(Pid, Deadline, NsOpts, remove, ProcessId),
     ok = prg_worker_sidecar:remove_process(Pid, Deadline, StorageOpts, NsId, ProcessId),
     ok = next_task(self()),
     State#prg_worker_state{process = undefined};
-do_process_task(TaskHeader, Task,
+do_process_task(
+    TaskHeader,
+    Task,
+    Deadline,
     State = #prg_worker_state{
         ns_id = _NsId,
-        ns_opts = #{process_step_timeout := TimeoutSec} = NsOpts,
+        ns_opts = NsOpts,
         process = Process,
         sidecar_pid = Pid
     }
@@ -118,7 +143,6 @@ do_process_task(TaskHeader, Task,
     Args = maps:get(args, Task, <<>>),
     Ctx = maps:get(context, Task, <<>>),
     Request = {extract_task_type(TaskHeader), Args, Process},
-    Deadline = erlang:system_time(millisecond) + TimeoutSec * 1000,
     Result = prg_worker_sidecar:process(Pid, Deadline, NsOpts, Request, Ctx),
     handle_result(Result, TaskHeader, Task, Deadline, State).
 
@@ -254,7 +278,7 @@ handle_result(
         finished_time => erlang:system_time(second),
         status => <<"finished">>
     },
-    {ok, Task} = prg_storage:get_task(StorageOpts, NsId, ErrorTaskId),
+    {ok, Task} = prg_worker_sidecar:get_task(Pid, Deadline, StorageOpts, NsId, ErrorTaskId),
     NewTask0 = maps:with([process_id, task_type, scheduled_time, args, metadata, context], Task),
     NewTask = NewTask0#{
         status => <<"running">>,

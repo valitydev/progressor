@@ -19,6 +19,9 @@
 %% Notifier functions wrapper
 -export([event_sink/5]).
 -export([lifecycle_sink/5]).
+%%
+-export([get_process/5]).
+-export([get_task/5]).
 
 -type context() :: binary().
 -type args() :: binary().
@@ -104,6 +107,21 @@ event_sink(Pid, Deadline, NsOpts, ProcessId, Events) ->
 lifecycle_sink(Pid, Deadline, NsOpts, TaskType, ProcessId) ->
     Timeout = Deadline - erlang:system_time(millisecond),
     gen_server:call(Pid, {lifecycle_sink, NsOpts, TaskType, ProcessId}, Timeout).
+%%
+
+-spec get_process(pid(), timestamp_ms(), storage_opts(), namespace_id(), id()) ->
+    {ok, process()} | {error, _Reason}.
+get_process(Pid, Deadline, StorageOpts, NsId, ProcessId) ->
+    Timeout = Deadline - erlang:system_time(millisecond),
+    gen_server:call(Pid, {get_process, StorageOpts, NsId, ProcessId}, Timeout).
+%%
+
+-spec get_task(pid(), timestamp_ms(), storage_opts(), namespace_id(), task_id()) ->
+    {ok, process()} | {error, _Reason}.
+get_task(Pid, Deadline, StorageOpts, NsId, TaskId) ->
+    Timeout = Deadline - erlang:system_time(millisecond),
+    gen_server:call(Pid, {get_task, StorageOpts, NsId, TaskId}, Timeout).
+
 
 %%%===================================================================
 %%% Spawning and gen_server implementation
@@ -157,6 +175,28 @@ handle_call(
 ) ->
     Fun = fun() ->
         prg_storage:remove_process(StorageOpts, NsId, ProcessId)
+    end,
+    Response = do_with_retry(Fun, ?DEFAULT_DELAY),
+    {reply, Response, State};
+
+handle_call(
+    {get_process, StorageOpts, NsId, ProcessId},
+    _From,
+    State = #prg_processor_state{}
+) ->
+    Fun = fun() ->
+        prg_storage:get_process(StorageOpts, NsId, ProcessId)
+    end,
+    Response = do_with_retry(Fun, ?DEFAULT_DELAY),
+    {reply, Response, State};
+
+handle_call(
+    {get_task, StorageOpts, NsId, TaskId},
+    _From,
+    State = #prg_processor_state{}
+) ->
+    Fun = fun() ->
+        prg_storage:get_task(StorageOpts, NsId, TaskId)
     end,
     Response = do_with_retry(Fun, ?DEFAULT_DELAY),
     {reply, Response, State};
