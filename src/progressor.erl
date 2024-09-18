@@ -43,7 +43,7 @@ init(Req) ->
         fun prepare_init/1,
         fun process_call/1
     ], Req#{type => init}) end,
-    do_with_log(Fun, "init req: ~p").
+    do_with_log(Fun, "init req: ~p", Req).
 
 -spec call(request()) -> {ok, _Result} | {error, _Reason}.
 call(Req) ->
@@ -55,7 +55,7 @@ call(Req) ->
         fun prepare_call/1,
         fun process_call/1
     ], Req#{type => call}) end,
-    do_with_log(Fun, "call req: ~p").
+    do_with_log(Fun, "call req: ~p", Req).
 
 -spec notify(request()) -> {ok, _Result} | {error, _Reason}.
 notify(Req) ->
@@ -67,7 +67,7 @@ notify(Req) ->
         fun prepare_call/1,
         fun process_notify/1
     ], Req#{type => notify}) end,
-    do_with_log(Fun, "notify req: ~p").
+    do_with_log(Fun, "notify req: ~p", Req).
 
 -spec repair(request()) -> {ok, _Result} | {error, _Reason}.
 repair(Req) ->
@@ -79,7 +79,7 @@ repair(Req) ->
         fun prepare_repair/1,
         fun process_call/1
     ], Req#{type => repair}) end,
-    do_with_log(Fun, "repair req: ~p").
+    do_with_log(Fun, "repair req: ~p", Req).
 
 -spec get(request()) -> {ok, _Result} | {error, _Reason}.
 get(Req) ->
@@ -87,7 +87,7 @@ get(Req) ->
         fun add_ns_opts/1,
         fun do_get_request/1
     ], Req) end,
-    do_with_log(Fun, "get req: ~p").
+    do_with_log(Fun, "get req: ~p", Req).
 
 %-ifdef(TEST).
 
@@ -273,7 +273,7 @@ new_process(ProcessId) ->
     }.
 %%
 
-do_with_log(Fun, Format) ->
+do_with_log(Fun, Format, Req) ->
     Result = Fun(),
-    logger:debug(Format, [Result]),
+    logger:debug(Format, [[Req, Result]]),
     Result.
