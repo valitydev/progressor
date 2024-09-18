@@ -36,53 +36,58 @@ reply(Pid, Msg) ->
 %% API
 -spec init(request()) -> {ok, _Result} | {error, _Reason}.
 init(Req) ->
-    prg_utils:pipe([
+    Fun = fun() -> prg_utils:pipe([
         fun add_ns_opts/1,
         fun check_idempotency/1,
         fun add_task/1,
         fun prepare_init/1,
         fun process_call/1
-    ], Req#{type => init}).
+    ], Req#{type => init}) end,
+    do_with_log(Fun, "init req: ~p").
 
 -spec call(request()) -> {ok, _Result} | {error, _Reason}.
 call(Req) ->
-    prg_utils:pipe([
+    Fun = fun() -> prg_utils:pipe([
         fun add_ns_opts/1,
         fun check_idempotency/1,
         fun(Opts) -> check_process_status(Opts, <<"running">>) end,
         fun add_task/1,
         fun prepare_call/1,
         fun process_call/1
-    ], Req#{type => call}).
+    ], Req#{type => call}) end,
+    do_with_log(Fun, "call req: ~p").
 
 -spec notify(request()) -> {ok, _Result} | {error, _Reason}.
 notify(Req) ->
-    prg_utils:pipe([
+    Fun = fun() -> prg_utils:pipe([
         fun add_ns_opts/1,
         fun check_idempotency/1,
         fun(Opts) -> check_process_status(Opts, <<"running">>) end,
         fun add_task/1,
         fun prepare_call/1,
         fun process_notify/1
-    ], Req#{type => notify}).
+    ], Req#{type => notify}) end,
+    do_with_log(Fun, "notify req: ~p").
 
 -spec repair(request()) -> {ok, _Result} | {error, _Reason}.
 repair(Req) ->
-    prg_utils:pipe([
+    Fun = fun() -> prg_utils:pipe([
         fun add_ns_opts/1,
         fun check_idempotency/1,
         fun(Opts) -> check_process_status(Opts, <<"error">>) end,
         fun add_task/1,
         fun prepare_repair/1,
         fun process_call/1
-    ], Req#{type => repair}).
+    ], Req#{type => repair}) end,
+    do_with_log(Fun, "repair req: ~p").
 
 -spec get(request()) -> {ok, _Result} | {error, _Reason}.
 get(Req) ->
-    prg_utils:pipe([
+    Fun = fun() -> prg_utils:pipe([
         fun add_ns_opts/1,
         fun do_get_request/1
-    ], Req).
+    ], Req) end,
+    do_with_log(Fun, "get req: ~p").
 
 %-ifdef(TEST).
 
@@ -266,3 +271,9 @@ new_process(ProcessId) ->
         process_id => ProcessId,
         status => <<"running">>
     }.
+%%
+
+do_with_log(Fun, Format) ->
+    Result = Fun(),
+    logger:debug(Format, [Result]),
+    Result.

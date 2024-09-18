@@ -37,10 +37,10 @@
 %% processor wrapper
 -spec process(pid(), non_neg_integer(), namespace_opts(), request(), context()) ->
     {ok, _Result} | {error, _Reason} | no_return().
-process(Pid, Deadline, NsOpts, Request, Context) ->
+process(Pid, Deadline, #{namespace := NS} = NsOpts, {TaskType, _, #{process_id := ProcessId}} = Request, Context) ->
     Timeout = Deadline - erlang:system_time(millisecond),
     Fun = fun() -> gen_server:call(Pid, {process, NsOpts, Request, Context}, Timeout) end,
-    do_with_log(Fun, "processor result: ~p").
+    do_with_log(Fun, "processor result: ~p", [NS, ProcessId, TaskType]).
 
 %% storage wrappers
 -spec complete_and_continue(
@@ -53,7 +53,7 @@ process(Pid, Deadline, NsOpts, Request, Context) ->
     [event()],
     task()
 ) -> {ok, [task()]} | no_return().
-complete_and_continue(Pid, _Deadline, StorageOpts, NsId, TaskResult, Process, Events, Task) ->
+complete_and_continue(Pid, _Deadline, StorageOpts, NsId, TaskResult, #{process_id := ProcId} = Process, Events, Task) ->
     %% Timeout = Deadline - erlang:system_time(millisecond),
     Fun = fun() ->
         gen_server:call(
@@ -61,7 +61,7 @@ complete_and_continue(Pid, _Deadline, StorageOpts, NsId, TaskResult, Process, Ev
             {complete_and_continue, StorageOpts, NsId, TaskResult, Process, Events, Task}, infinity
         )
     end,
-    do_with_log(Fun, "complete_and_continue result: ~p").
+    do_with_log(Fun, "complete_and_continue result: ~p", [NsId, ProcId]).
 
 -spec complete_and_suspend(
     pid(),
@@ -72,7 +72,7 @@ complete_and_continue(Pid, _Deadline, StorageOpts, NsId, TaskResult, Process, Ev
     process(),
     [event()]
 ) -> {ok, [task()]} | no_return().
-complete_and_suspend(Pid, _Deadline, StorageOpts, NsId, TaskResult, Process, Events) ->
+complete_and_suspend(Pid, _Deadline, StorageOpts, NsId, TaskResult, #{process_id := ProcId} = Process, Events) ->
     %% Timeout = Deadline - erlang:system_time(millisecond),
     Fun = fun() ->
         gen_server:call(
@@ -80,7 +80,7 @@ complete_and_suspend(Pid, _Deadline, StorageOpts, NsId, TaskResult, Process, Eve
             {complete_and_suspend, StorageOpts, NsId, TaskResult, Process, Events}, infinity
         )
     end,
-    do_with_log(Fun, "complete_and_suspend result: ~p").
+    do_with_log(Fun, "complete_and_suspend result: ~p", [NsId, ProcId]).
 
 -spec complete_and_unlock(
     pid(),
@@ -91,7 +91,7 @@ complete_and_suspend(Pid, _Deadline, StorageOpts, NsId, TaskResult, Process, Eve
     process(),
     [event()]
 ) -> {ok, [task()]} | no_return().
-complete_and_unlock(Pid, _Deadline, StorageOpts, NsId, TaskResult, Process, Events) ->
+complete_and_unlock(Pid, _Deadline, StorageOpts, NsId, TaskResult, #{process_id := ProcId} = Process, Events) ->
     %% Timeout = Deadline - erlang:system_time(millisecond),
     Fun = fun() ->
         gen_server:call(
@@ -99,11 +99,11 @@ complete_and_unlock(Pid, _Deadline, StorageOpts, NsId, TaskResult, Process, Even
             {complete_and_unlock, StorageOpts, NsId, TaskResult, Process, Events}, infinity
         )
     end,
-    do_with_log(Fun, "complete_and_unlock result: ~p").
+    do_with_log(Fun, "complete_and_unlock result: ~p", [NsId, ProcId]).
 
 -spec complete_and_error(pid(), timestamp_ms(), storage_opts(), namespace_id(), task_result(), process()) ->
     ok | no_return().
-complete_and_error(Pid, _Deadline, StorageOpts, NsId, TaskResult, Process) ->
+complete_and_error(Pid, _Deadline, StorageOpts, NsId, TaskResult, #{process_id := ProcId} = Process) ->
     %% Timeout = Deadline - erlang:system_time(millisecond),
     Fun = fun() ->
         gen_server:call(
@@ -111,14 +111,14 @@ complete_and_error(Pid, _Deadline, StorageOpts, NsId, TaskResult, Process) ->
             {complete_and_error, StorageOpts, NsId, TaskResult, Process}, infinity
         )
     end,
-    do_with_log(Fun, "complete_and_error result: ~p").
+    do_with_log(Fun, "complete_and_error result: ~p", [NsId, ProcId]).
 
 -spec remove_process(pid(), timestamp_ms(), storage_opts(), namespace_id(), id()) ->
     ok | no_return().
 remove_process(Pid, _Deadline, StorageOpts, NsId, ProcessId) ->
     %% Timeout = Deadline - erlang:system_time(millisecond),
     Fun = fun() -> gen_server:call(Pid, {remove_process, StorageOpts, NsId, ProcessId}, infinity) end,
-    do_with_log(Fun, "complete_and_error result: ~p").
+    do_with_log(Fun, "complete_and_error result: ~p", [NsId, ProcessId]).
 
 %% notifier wrappers
 
@@ -141,14 +141,14 @@ lifecycle_sink(Pid, Deadline, NsOpts, TaskType, ProcessId) ->
 get_process(Pid, _Deadline, StorageOpts, NsId, ProcessId) ->
     %% Timeout = Deadline - erlang:system_time(millisecond),
     Fun = fun() -> gen_server:call(Pid, {get_process, StorageOpts, NsId, ProcessId}, infinity) end,
-    do_with_log(Fun, "get_process result: ~p").
+    do_with_log(Fun, "get_process result: ~p", [NsId, ProcessId]).
 
 -spec get_task(pid(), timestamp_ms(), storage_opts(), namespace_id(), task_id()) ->
     {ok, process()} | {error, _Reason}.
 get_task(Pid, _Deadline, StorageOpts, NsId, TaskId) ->
     %% Timeout = Deadline - erlang:system_time(millisecond),
     Fun = fun() -> gen_server:call(Pid, {get_task, StorageOpts, NsId, TaskId}, infinity) end,
-    do_with_log(Fun, "get_task result: ~p").
+    do_with_log(Fun, "get_task result: ~p", [NsId]).
 
 
 %%%===================================================================
@@ -307,6 +307,9 @@ do_with_retry(Fun, Delay) ->
 %%
 
 do_with_log(Fun, Format) ->
+    do_with_log(Fun, Format, []).
+
+do_with_log(Fun, Format, Params) ->
     Result = Fun(),
-    logger:debug(Format, [Result]),
+    logger:debug(Format, [Params ++ [Result]]),
     Result.
