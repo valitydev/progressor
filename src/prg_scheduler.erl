@@ -30,7 +30,7 @@ push_task(NsId, TaskHeader, Task) ->
 -spec pop_task(namespace_id(), pid()) -> {task_header(), task()} | not_found.
 pop_task(NsId, Worker) ->
     RegName = prg_utils:registered_name(NsId, "_scheduler"),
-    gen_server:call(RegName, {pop_task, Worker}).
+    gen_server:call(RegName, {pop_task, Worker}, infinity).
 
 -spec continuation_task(namespace_id(), pid(), task()) -> {task_header(), task()} | ok.
 continuation_task(NsId, Worker, Task) ->
