@@ -30,6 +30,11 @@
 -record(prg_processor_state, {}).
 
 -define(DEFAULT_DELAY, 3000).
+-define(PROCESSING_KEY, progressor_task_processing_duration_ms).
+-define(COMPLETION_KEY, progressor_task_completion_duration_ms).
+-define(REMOVING_KEY, progressor_process_removing_duration_ms).
+-define(NOTIFICATION_KEY, progressor_notification_duration_ms).
+-define(SERVICE, "hellgate").
 
 -dialyzer({nowarn_function, do_with_retry/2}).
 %% API
@@ -37,10 +42,10 @@
 %% processor wrapper
 -spec process(pid(), non_neg_integer(), namespace_opts(), request(), context()) ->
     {ok, _Result} | {error, _Reason} | no_return().
-process(Pid, Deadline, #{namespace := NS} = NsOpts, {TaskType, _, #{process_id := ProcessId}} = Request, Context) ->
+process(Pid, Deadline, #{namespace := NS} = NsOpts, {TaskType, _, _} = Request, Context) ->
     Timeout = Deadline - erlang:system_time(millisecond),
     Fun = fun() -> gen_server:call(Pid, {process, NsOpts, Request, Context}, Timeout) end,
-    do_with_log(Fun, "processor result: ~p", [NS, ProcessId, TaskType]).
+    with_observe(Fun, ?PROCESSING_KEY, [?SERVICE, NS, TaskType]).
 
 %% storage wrappers
 -spec complete_and_continue(
@@ -53,15 +58,16 @@ process(Pid, Deadline, #{namespace := NS} = NsOpts, {TaskType, _, #{process_id :
     [event()],
     task()
 ) -> {ok, [task()]} | no_return().
-complete_and_continue(Pid, _Deadline, StorageOpts, NsId, TaskResult, #{process_id := ProcId} = Process, Events, Task) ->
+complete_and_continue(Pid, _Deadline, StorageOpts, NsId, TaskResult, Process, Events, Task) ->
     %% Timeout = Deadline - erlang:system_time(millisecond),
     Fun = fun() ->
         gen_server:call(
             Pid,
-            {complete_and_continue, StorageOpts, NsId, TaskResult, Process, Events, Task}, infinity
+            {complete_and_continue, StorageOpts, NsId, TaskResult, Process, Events, Task},
+            infinity
         )
     end,
-    do_with_log(Fun, "complete_and_continue result: ~p", [NsId, ProcId]).
+    with_observe(Fun, ?COMPLETION_KEY, [?SERVICE, erlang:atom_to_list(NsId), "complete_and_continue"]).
 
 -spec complete_and_suspend(
     pid(),
@@ -72,7 +78,7 @@ complete_and_continue(Pid, _Deadline, StorageOpts, NsId, TaskResult, #{process_i
     process(),
     [event()]
 ) -> {ok, [task()]} | no_return().
-complete_and_suspend(Pid, _Deadline, StorageOpts, NsId, TaskResult, #{process_id := ProcId} = Process, Events) ->
+complete_and_suspend(Pid, _Deadline, StorageOpts, NsId, TaskResult, Process, Events) ->
     %% Timeout = Deadline - erlang:system_time(millisecond),
     Fun = fun() ->
         gen_server:call(
@@ -80,7 +86,7 @@ complete_and_suspend(Pid, _Deadline, StorageOpts, NsId, TaskResult, #{process_id
             {complete_and_suspend, StorageOpts, NsId, TaskResult, Process, Events}, infinity
         )
     end,
-    do_with_log(Fun, "complete_and_suspend result: ~p", [NsId, ProcId]).
+    with_observe(Fun, ?COMPLETION_KEY, [?SERVICE, erlang:atom_to_list(NsId), "complete_and_suspend"]).
 
 -spec complete_and_unlock(
     pid(),
@@ -91,7 +97,7 @@ complete_and_suspend(Pid, _Deadline, StorageOpts, NsId, TaskResult, #{process_id
     process(),
     [event()]
 ) -> {ok, [task()]} | no_return().
-complete_and_unlock(Pid, _Deadline, StorageOpts, NsId, TaskResult, #{process_id := ProcId} = Process, Events) ->
+complete_and_unlock(Pid, _Deadline, StorageOpts, NsId, TaskResult, Process, Events) ->
     %% Timeout = Deadline - erlang:system_time(millisecond),
     Fun = fun() ->
         gen_server:call(
@@ -99,11 +105,11 @@ complete_and_unlock(Pid, _Deadline, StorageOpts, NsId, TaskResult, #{process_id 
             {complete_and_unlock, StorageOpts, NsId, TaskResult, Process, Events}, infinity
         )
     end,
-    do_with_log(Fun, "complete_and_unlock result: ~p", [NsId, ProcId]).
+    with_observe(Fun, ?COMPLETION_KEY, [?SERVICE, erlang:atom_to_list(NsId), "complete_and_unlock"]).
 
 -spec complete_and_error(pid(), timestamp_ms(), storage_opts(), namespace_id(), task_result(), process()) ->
     ok | no_return().
-complete_and_error(Pid, _Deadline, StorageOpts, NsId, TaskResult, #{process_id := ProcId} = Process) ->
+complete_and_error(Pid, _Deadline, StorageOpts, NsId, TaskResult, Process) ->
     %% Timeout = Deadline - erlang:system_time(millisecond),
     Fun = fun() ->
         gen_server:call(
@@ -111,45 +117,42 @@ complete_and_error(Pid, _Deadline, StorageOpts, NsId, TaskResult, #{process_id :
             {complete_and_error, StorageOpts, NsId, TaskResult, Process}, infinity
         )
     end,
-    do_with_log(Fun, "complete_and_error result: ~p", [NsId, ProcId]).
+    with_observe(Fun, ?COMPLETION_KEY, [?SERVICE, erlang:atom_to_list(NsId), "complete_and_unlock"]).
 
 -spec remove_process(pid(), timestamp_ms(), storage_opts(), namespace_id(), id()) ->
     ok | no_return().
 remove_process(Pid, _Deadline, StorageOpts, NsId, ProcessId) ->
     %% Timeout = Deadline - erlang:system_time(millisecond),
     Fun = fun() -> gen_server:call(Pid, {remove_process, StorageOpts, NsId, ProcessId}, infinity) end,
-    do_with_log(Fun, "complete_and_error result: ~p", [NsId, ProcessId]).
+    with_observe(Fun, ?REMOVING_KEY, [?SERVICE, erlang:atom_to_list(NsId)]).
 
 %% notifier wrappers
 
 -spec event_sink(pid(), timestamp_ms(), namespace_opts(), id(), [event()]) -> ok | no_return().
-event_sink(Pid, Deadline, NsOpts, ProcessId, Events) ->
+event_sink(Pid, Deadline, #{namespace := Ns} = NsOpts, ProcessId, Events) ->
     Timeout = Deadline - erlang:system_time(millisecond),
     Fun = fun() -> gen_server:call(Pid, {event_sink, NsOpts, ProcessId, Events}, Timeout) end,
-    do_with_log(Fun, "event_sink result: ~p").
+    with_observe(Fun, ?NOTIFICATION_KEY, [?SERVICE, Ns, "event_sink"]).
 
 -spec lifecycle_sink(pid(), timestamp_ms(), namespace_opts(), task_t() | {error, _Reason}, id()) ->
     ok | no_return().
-lifecycle_sink(Pid, Deadline, NsOpts, TaskType, ProcessId) ->
+lifecycle_sink(Pid, Deadline, #{namespace := Ns} = NsOpts, TaskType, ProcessId) ->
     Timeout = Deadline - erlang:system_time(millisecond),
     Fun = fun() -> gen_server:call(Pid, {lifecycle_sink, NsOpts, TaskType, ProcessId}, Timeout) end,
-    do_with_log(Fun, "lifecycle_sink result: ~p").
+    with_observe(Fun, ?NOTIFICATION_KEY, [?SERVICE, Ns, "lifecycle_sink"]).
 %%
 
 -spec get_process(pid(), timestamp_ms(), storage_opts(), namespace_id(), id()) ->
     {ok, process()} | {error, _Reason}.
 get_process(Pid, _Deadline, StorageOpts, NsId, ProcessId) ->
     %% Timeout = Deadline - erlang:system_time(millisecond),
-    Fun = fun() -> gen_server:call(Pid, {get_process, StorageOpts, NsId, ProcessId}, infinity) end,
-    do_with_log(Fun, "get_process result: ~p", [NsId, ProcessId]).
+    gen_server:call(Pid, {get_process, StorageOpts, NsId, ProcessId}, infinity).
 
 -spec get_task(pid(), timestamp_ms(), storage_opts(), namespace_id(), task_id()) ->
     {ok, process()} | {error, _Reason}.
 get_task(Pid, _Deadline, StorageOpts, NsId, TaskId) ->
     %% Timeout = Deadline - erlang:system_time(millisecond),
-    Fun = fun() -> gen_server:call(Pid, {get_task, StorageOpts, NsId, TaskId}, infinity) end,
-    do_with_log(Fun, "get_task result: ~p", [NsId]).
-
+    gen_server:call(Pid, {get_task, StorageOpts, NsId, TaskId}, infinity).
 
 %%%===================================================================
 %%% Spawning and gen_server implementation
@@ -306,10 +309,16 @@ do_with_retry(Fun, Delay) ->
     end.
 %%
 
-do_with_log(Fun, Format) ->
-    do_with_log(Fun, Format, []).
+with_observe(Fun, MetricKey, Labels) ->
+    with_observe(Fun, histogram, MetricKey, Labels).
 
-do_with_log(Fun, Format, Params) ->
-    Result = Fun(),
-    logger:debug(Format, [Params ++ [Result]]),
+with_observe(Fun, MetricType, MetricKey, Labels) ->
+    {DurationMicro, Result} = timer:tc(Fun),
+    collect(MetricType, MetricKey, Labels, DurationMicro div 1000),
     Result.
+
+collect(histogram, MetricKey, Labels, Value) ->
+    prometheus_histogram:observe(MetricKey, Labels, Value).
+%%collect(_, _MetricKey, _Labels, _Value) ->
+%%    %% TODO implement it
+%%    ok.

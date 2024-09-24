@@ -8,6 +8,7 @@
     stdlib,
     jsx,
     herd,
+    prometheus,
     epg_connector,
     thrift,
     mg_proto,
