@@ -18,6 +18,9 @@
 -dialyzer({nowarn_function, search_timers/3}).
 -dialyzer({nowarn_function, search_calls/3}).
 
+-define(CALLS_SCAN_KEY, progressor_calls_scanning_duration_ms).
+-define(TIMERS_SCAN_KEY, progressor_timers_scanning_duration_ms).
+
 %%%
 %%% API
 %%%
@@ -152,35 +155,41 @@ search_timers(
         task_scan_timeout := ScanTimeoutSec
     }
 ) ->
-    try
-        prg_storage:search_timers(StorageOpts, NsId, TimeoutSec + ScanTimeoutSec, FreeWorkersCount) of
-            Result when is_list(Result) ->
-                Result;
-            Unexpected ->
-                logger:error("search timers error: ~p", [Unexpected]),
+    Fun = fun() ->
+        try
+            prg_storage:search_timers(StorageOpts, NsId, TimeoutSec + ScanTimeoutSec, FreeWorkersCount) of
+                Result when is_list(Result) ->
+                    Result;
+                Unexpected ->
+                    logger:error("search timers error: ~p", [Unexpected]),
+                    []
+        catch
+            Class:Reason:Trace ->
+                logger:error("search timers exception: ~p", [[Class, Reason, Trace]]),
                 []
-    catch
-        Class:Reason:Trace ->
-            logger:error("search timers exception: ~p", [[Class, Reason, Trace]]),
-            []
-    end.
+        end
+    end,
+    prg_utils:with_observe(Fun, ?TIMERS_SCAN_KEY, [erlang:atom_to_binary(NsId, utf8)]).
 
 search_calls(
     FreeWorkersCount,
     NsId,
     #{storage := StorageOpts}
 ) ->
-    try prg_storage:search_calls(StorageOpts, NsId, FreeWorkersCount) of
-        Result when is_list(Result) ->
-            Result;
-        Unexpected ->
-            logger:error("search calls error: ~p", [Unexpected]),
-            []
-    catch
-        Class:Reason:Trace ->
-            logger:error("search calls exception: ~p", [[Class, Reason, Trace]]),
-            []
-    end.
+    Fun = fun() ->
+        try prg_storage:search_calls(StorageOpts, NsId, FreeWorkersCount) of
+            Result when is_list(Result) ->
+                Result;
+            Unexpected ->
+                logger:error("search calls error: ~p", [Unexpected]),
+                []
+        catch
+            Class:Reason:Trace ->
+                logger:error("search calls exception: ~p", [[Class, Reason, Trace]]),
+                []
+        end
+    end,
+    prg_utils:with_observe(Fun, ?CALLS_SCAN_KEY, [erlang:atom_to_binary(NsId, utf8)]).
 
 do_push_task(TaskHeader, Task, State) ->
     FreeWorkers = State#prg_scheduler_state.free_workers,

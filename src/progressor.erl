@@ -188,9 +188,9 @@ await_task_result(StorageOpts, NsId, KeyOrId, Timeout, Duration) ->
     end.
 
 do_get_request(#{ns_opts := #{storage := StorageOpts}, id := Id, ns := NsId, args := HistoryRange}) ->
-    prg_storage:get_process(StorageOpts, NsId, Id, HistoryRange);
+    prg_storage:get_process(external, StorageOpts, NsId, Id, HistoryRange);
 do_get_request(#{ns_opts := #{storage := StorageOpts}, id := Id, ns := NsId}) ->
-    prg_storage:get_process(StorageOpts, NsId, Id, #{}).
+    prg_storage:get_process(external, StorageOpts, NsId, Id, #{}).
 
 process_call(#{ns := NsId, ns_opts := NsOpts, type := Type, task := Task}) ->
     TimeoutSec = maps:get(process_step_timeout, NsOpts, ?DEFAULT_STEP_TIMEOUT_SEC),

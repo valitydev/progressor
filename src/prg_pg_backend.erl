@@ -4,26 +4,29 @@
 -include_lib("progressor/include/progressor.hrl").
 
 %% API
-%% Task management
+
+%% api handler functions
 -export([get_task_result/3]).
--export([save_task/3]).
--export([get_task/3]).
-
-%% Process management
 -export([get_process_status/3]).
--export([get_process/4]).
--export([remove_process/3]).
-
-%% Complex operations
--export([search_timers/4]).
--export([search_calls/3]).
 -export([prepare_init/4]).
 -export([prepare_call/4]).
 -export([prepare_repair/4]).
+
+%% scan functions
+-export([search_timers/4]).
+-export([search_calls/3]).
+
+%% worker functions
 -export([complete_and_continue/6]).
 -export([complete_and_suspend/5]).
--export([complete_and_error/4]).
 -export([complete_and_unlock/5]).
+-export([complete_and_error/4]).
+-export([remove_process/3]).
+
+%% shared functions
+-export([save_task/4]).
+-export([get_task/4]).
+-export([get_process/5]).
 
 %% Init operations
 -export([db_init/2]).
@@ -39,7 +42,8 @@
 %% Task management
 -spec get_task_result(pg_opts(), namespace_id(), {task_id | idempotency_key, binary()}) ->
     {ok, term()} | {error, _Reason}.
-get_task_result(#{pool := Pool}, NsId, KeyOrId) ->
+get_task_result(PgOpts, NsId, KeyOrId) ->
+    Pool = get_pool(external, PgOpts),
     TaskTable = construct_table_name(NsId, "_tasks"),
     case do_get_task_result(Pool, TaskTable, KeyOrId) of
         {ok, _, []} ->
@@ -50,8 +54,9 @@ get_task_result(#{pool := Pool}, NsId, KeyOrId) ->
             {ok, binary_to_term(Value)}
     end.
 
--spec get_task(pg_opts(), namespace_id(), task_id()) -> {ok, task()} | {error, _Reason}.
-get_task(#{pool := Pool}, NsId, TaskId) ->
+-spec get_task(recipient(), pg_opts(), namespace_id(), task_id()) -> {ok, task()} | {error, _Reason}.
+get_task(Recipient, PgOpts, NsId, TaskId) ->
+    Pool = get_pool(Recipient, PgOpts),
     TaskTable = construct_table_name(NsId, "_tasks"),
     case do_get_task(Pool, TaskTable, TaskId) of
         {ok, _, []} ->
@@ -61,15 +66,16 @@ get_task(#{pool := Pool}, NsId, TaskId) ->
             {ok, Task}
     end.
 
--spec save_task(pg_opts(), namespace_id(), task()) -> {ok, task_id()}.
-save_task(#{pool := Pool}, NsId, Task) ->
+-spec save_task(recipient(), pg_opts(), namespace_id(), task()) -> {ok, task_id()}.
+save_task(Recipient, PgOpts, NsId, Task) ->
+    Pool = get_pool(Recipient, PgOpts),
     Table = construct_table_name(NsId, "_tasks"),
     {ok, _, _, [{TaskId}]} = do_save_task(Pool, Table, Task),
     {ok, TaskId}.
 
-%% Process management
 -spec get_process_status(pg_opts(), namespace_id(), id()) -> term().
-get_process_status(#{pool := Pool}, NsId, Id) ->
+get_process_status(PgOpts, NsId, Id) ->
+    Pool = get_pool(external, PgOpts),
     Table = construct_table_name(NsId, "_processes"),
     {ok, _Columns, Rows} = epg_pool:query(
         Pool,
@@ -81,8 +87,9 @@ get_process_status(#{pool := Pool}, NsId, Id) ->
         [{Status}] -> {ok, Status}
     end.
 
--spec get_process(pg_opts(), namespace_id(), id(), history_range()) -> {ok, process()}.
-get_process(#{pool := Pool}, NsId, ProcessId, HistoryRange) ->
+-spec get_process(recipient(), pg_opts(), namespace_id(), id(), history_range()) -> {ok, process()}.
+get_process(Recipient, PgOpts, NsId, ProcessId, HistoryRange) ->
+    Pool = get_pool(Recipient, PgOpts),
     EventsTable = construct_table_name(NsId, "_events"),
     ProcessesTable = construct_table_name(NsId, "_processes"),
     RangeCondition = create_range_condition(HistoryRange),
@@ -110,7 +117,8 @@ get_process(#{pool := Pool}, NsId, ProcessId, HistoryRange) ->
     end.
 
 -spec remove_process(pg_opts(), namespace_id(), id()) -> ok | no_return().
-remove_process(#{pool := Pool}, NsId, ProcessId) ->
+remove_process(PgOpts, NsId, ProcessId) ->
+    Pool = get_pool(internal, PgOpts),
     LocksTable = construct_table_name(NsId, "_locks"),
     TaskTable = construct_table_name(NsId, "_tasks"),
     EventsTable = construct_table_name(NsId, "_events"),
@@ -128,7 +136,8 @@ remove_process(#{pool := Pool}, NsId, ProcessId) ->
 
 %% Complex operations
 -spec search_timers(pg_opts(), namespace_id(), timeout_sec(), pos_integer()) -> [task()].
-search_timers(#{pool := Pool}, NsId, Timeout, Limit) ->
+search_timers(PgOpts, NsId, Timeout, Limit) ->
+    Pool = get_pool(scan, PgOpts),
     TaskTable = construct_table_name(NsId, "_tasks"),
     LocksTable = construct_table_name(NsId, "_locks"),
     ProcessesTable = construct_table_name(NsId, "_processes"),
@@ -177,7 +186,8 @@ search_timers(#{pool := Pool}, NsId, Timeout, Limit) ->
 %%
 
 -spec search_calls(pg_opts(), namespace_id(), pos_integer()) -> [task()].
-search_calls(#{pool := Pool}, NsId, Limit) ->
+search_calls(PgOpts, NsId, Limit) ->
+    Pool = get_pool(scan, PgOpts),
     TaskTable = construct_table_name(NsId, "_tasks"),
     LocksTable = construct_table_name(NsId, "_locks"),
     NowSec = erlang:system_time(second),
@@ -204,7 +214,8 @@ search_calls(#{pool := Pool}, NsId, Limit) ->
     to_maps(Columns, Rows, fun marshal_task/1).
 
 -spec prepare_init(pg_opts(), namespace_id(), process(), task()) -> {ok, task_id()} | {error, _Reason}.
-prepare_init(#{pool := Pool}, NsId, #{process_id := ProcessId} = Process, InitTask) ->
+prepare_init(PgOpts, NsId, #{process_id := ProcessId} = Process, InitTask) ->
+    Pool = get_pool(external, PgOpts),
     ProcessesTable = construct_table_name(NsId, "_processes"),
     TaskTable = construct_table_name(NsId, "_tasks"),
     LocksTable = construct_table_name(NsId, "_locks"),
@@ -224,7 +235,8 @@ prepare_init(#{pool := Pool}, NsId, #{process_id := ProcessId} = Process, InitTa
 
 -spec prepare_call(pg_opts(), namespace_id(), id(), task()) ->
     {ok, {postpone, task_id()} | {continue, task_id()}} | {error, _Error}.
-prepare_call(#{pool := Pool}, NsId, ProcessId, Task) ->
+prepare_call(PgOpts, NsId, ProcessId, Task) ->
+    Pool = get_pool(external, PgOpts),
     TaskTable = construct_table_name(NsId, "_tasks"),
     LocksTable = construct_table_name(NsId, "_locks"),
     %% TODO optimize request
@@ -242,7 +254,8 @@ prepare_call(#{pool := Pool}, NsId, ProcessId, Task) ->
     ).
 
 -spec prepare_repair(pg_opts(), namespace_id(), id(), task()) -> {ok, task_id()} | {error, _Reason}.
-prepare_repair(#{pool := Pool}, NsId, ProcessId, RepairTask) ->
+prepare_repair(PgOpts, NsId, ProcessId, RepairTask) ->
+    Pool = get_pool(external, PgOpts),
     TaskTable = construct_table_name(NsId, "_tasks"),
     LocksTable = construct_table_name(NsId, "_locks"),
     epg_pool:with(
@@ -259,8 +272,9 @@ prepare_repair(#{pool := Pool}, NsId, ProcessId, RepairTask) ->
 
 -spec complete_and_continue(pg_opts(), namespace_id(), task_result(), process(), [event()], task()) ->
     {ok, [task()]}.
-complete_and_continue(#{pool := Pool}, NsId, TaskResult, Process, Events, NextTask) ->
+complete_and_continue(PgOpts, NsId, TaskResult, Process, Events, NextTask) ->
     % update completed task and process, cancel blocked and waiting tasks, save new task
+    Pool = get_pool(internal, PgOpts),
     ProcessesTable = construct_table_name(NsId, "_processes"),
     EventsTable = construct_table_name(NsId, "_events"),
     TaskTable = construct_table_name(NsId, "_tasks"),
@@ -302,8 +316,9 @@ complete_and_continue(#{pool := Pool}, NsId, TaskResult, Process, Events, NextTa
 
 -spec complete_and_suspend(pg_opts(), namespace_id(), task_result(), process(), [event()]) ->
     {ok, [task()]}.
-complete_and_suspend(#{pool := Pool}, NsId, TaskResult, Process, Events) ->
+complete_and_suspend(PgOpts, NsId, TaskResult, Process, Events) ->
     % update completed task and process, cancel blocked and waiting tasks
+    Pool = get_pool(internal, PgOpts),
     ProcessesTable = construct_table_name(NsId, "_processes"),
     EventsTable = construct_table_name(NsId, "_events"),
     TaskTable = construct_table_name(NsId, "_tasks"),
@@ -325,7 +340,8 @@ complete_and_suspend(#{pool := Pool}, NsId, TaskResult, Process, Events) ->
     {ok, to_maps(Columns, Rows, fun marshal_task/1)}.
 
 -spec complete_and_error(pg_opts(), namespace_id(), task_result(), process()) -> ok.
-complete_and_error(#{pool := Pool}, NsId, TaskResult, Process) ->
+complete_and_error(PgOpts, NsId, TaskResult, Process) ->
+    Pool = get_pool(internal, PgOpts),
     ProcessesTable = construct_table_name(NsId, "_processes"),
     TaskTable = construct_table_name(NsId, "_tasks"),
     LocksTable = construct_table_name(NsId, "_locks"),
@@ -344,8 +360,9 @@ complete_and_error(#{pool := Pool}, NsId, TaskResult, Process) ->
 
 -spec complete_and_unlock(pg_opts(), namespace_id(), task_result(), process(), [event()]) ->
     {ok, [task()]}.
-complete_and_unlock(#{pool := Pool}, NsId, TaskResult, Process, Events) ->
+complete_and_unlock(PgOpts, NsId, TaskResult, Process, Events) ->
     % update completed task and process, unlock blocked task
+    Pool = get_pool(internal, PgOpts),
     ProcessesTable = construct_table_name(NsId, "_processes"),
     EventsTable = construct_table_name(NsId, "_events"),
     TaskTable = construct_table_name(NsId, "_tasks"),
@@ -843,3 +860,11 @@ marshal_event(Event) ->
         (<<"payload">>, Payload, Acc) -> Acc#{payload => Payload};
         (_, _, Acc) -> Acc
     end, #{}, Event).
+%%
+
+get_pool(internal, #{pool := Pool}) ->
+    Pool;
+get_pool(external, #{pool := BasePool} = PgOpts) ->
+    maps:get(front_pool, PgOpts, BasePool);
+get_pool(scan, #{pool := BasePool} = PgOpts) ->
+    maps:get(scan_pool, PgOpts, BasePool).

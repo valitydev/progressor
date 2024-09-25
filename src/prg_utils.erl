@@ -7,6 +7,8 @@
 -export([pipe/2]).
 -export([format/1]).
 -export([make_ns_opts/2]).
+-export([with_observe/3]).
+-export([with_observe/4]).
 
 -spec registered_name(atom(), string()) -> atom().
 registered_name(BaseAtom, PostfixStr) ->
@@ -38,3 +40,21 @@ make_ns_opts(NsId, NsOpts) ->
     ConfigDefaults = application:get_env(progressor, defaults, #{}),
     Defaults = maps:merge(PresetDefaults, ConfigDefaults),
     maps:merge(Defaults, NsOpts).
+
+-spec with_observe(_Fun, atom(), [list() | binary()]) -> any().
+with_observe(Fun, MetricKey, Labels) ->
+    with_observe(Fun, histogram, MetricKey, Labels).
+
+-spec with_observe(_Fun, atom(), atom(), [list() | binary()]) -> any().
+with_observe(Fun, MetricType, MetricKey, Labels) ->
+    {DurationMicro, Result} = timer:tc(Fun),
+    DurationMs = DurationMicro div 1000,
+    logger:debug("metric: ~p, labels: ~p, value: ~p", [MetricKey, Labels, DurationMs]),
+    collect(MetricType, MetricKey, Labels, DurationMs),
+    Result.
+
+collect(histogram, MetricKey, Labels, Value) ->
+    prometheus_histogram:observe(MetricKey, Labels, Value).
+%%collect(_, _MetricKey, _Labels, _Value) ->
+%%    %% TODO implement it
+%%    ok.

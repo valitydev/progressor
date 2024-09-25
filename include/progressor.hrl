@@ -99,6 +99,8 @@
 
 -type namespace_id() :: atom().
 
+-type recipient() :: internal | external.
+
 -type history_range() :: #{
     offset => non_neg_integer(),
     limit => pos_integer()
