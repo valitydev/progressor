@@ -213,7 +213,8 @@ search_calls(PgOpts, NsId, Limit) ->
     ),
     to_maps(Columns, Rows, fun marshal_task/1).
 
--spec prepare_init(pg_opts(), namespace_id(), process(), task()) -> {ok, task_id()} | {error, _Reason}.
+-spec prepare_init(pg_opts(), namespace_id(), process(), task()) ->
+    {ok, {postpone, task_id()} | {continue, task_id()}} | {error, _Reason}.
 prepare_init(PgOpts, NsId, #{process_id := ProcessId} = Process, InitTask) ->
     Pool = get_pool(external, PgOpts),
     ProcessesTable = construct_table_name(NsId, "_processes"),
@@ -225,8 +226,13 @@ prepare_init(PgOpts, NsId, #{process_id := ProcessId} = Process, InitTask) ->
             case do_save_process(Connection, ProcessesTable, Process) of
                 {ok, _} ->
                     {ok, _, _, [{TaskId}]} = do_save_task(Connection, TaskTable, InitTask),
-                    {ok, _} = do_lock_process(Connection, LocksTable, ProcessId, TaskId),
-                    {ok, TaskId};
+                    case InitTask of
+                        #{status := <<"running">>} ->
+                            {ok, _} = do_lock_process(Connection, LocksTable, ProcessId, TaskId),
+                            {ok, {continue, TaskId}};
+                        #{status := <<"waiting">>} ->
+                            {ok, {postpone, TaskId}}
+                    end;
                 {error, #error{codename = unique_violation}} ->
                     {error, <<"process already exists">>}
             end
@@ -235,11 +241,20 @@ prepare_init(PgOpts, NsId, #{process_id := ProcessId} = Process, InitTask) ->
 
 -spec prepare_call(pg_opts(), namespace_id(), id(), task()) ->
     {ok, {postpone, task_id()} | {continue, task_id()}} | {error, _Error}.
-prepare_call(PgOpts, NsId, ProcessId, Task) ->
+prepare_call(PgOpts, NsId, _ProcessId, #{status := <<"waiting">>} = Task) ->
+    Pool = get_pool(external, PgOpts),
+    TaskTable = construct_table_name(NsId, "_tasks"),
+    epg_pool:with(
+        Pool,
+        fun(C) ->
+            {ok, _, _, [{TaskId}]} = do_save_task(C, TaskTable, Task#{status => <<"waiting">>}),
+            {ok, {postpone, TaskId}}
+        end
+    );
+prepare_call(PgOpts, NsId, ProcessId, #{status := <<"running">>} = Task) ->
     Pool = get_pool(external, PgOpts),
     TaskTable = construct_table_name(NsId, "_tasks"),
     LocksTable = construct_table_name(NsId, "_locks"),
-    %% TODO optimize request
     epg_pool:with(
         Pool,
         fun(C) ->
@@ -253,8 +268,19 @@ prepare_call(PgOpts, NsId, ProcessId, Task) ->
         end
     ).
 
--spec prepare_repair(pg_opts(), namespace_id(), id(), task()) -> {ok, task_id()} | {error, _Reason}.
-prepare_repair(PgOpts, NsId, ProcessId, RepairTask) ->
+-spec prepare_repair(pg_opts(), namespace_id(), id(), task()) ->
+    {ok, {postpone, task_id()} | {continue, task_id()}} | {error, _Reason}.
+prepare_repair(PgOpts, NsId, _ProcessId, #{status := <<"waiting">>} = RepairTask) ->
+    Pool = get_pool(external, PgOpts),
+    TaskTable = construct_table_name(NsId, "_tasks"),
+    epg_pool:with(
+        Pool,
+        fun(C) ->
+            {ok, _, _, [{TaskId}]} = do_save_task(C, TaskTable, RepairTask),
+            {ok, {postpone, TaskId}}
+        end
+    );
+prepare_repair(PgOpts, NsId, ProcessId, #{status := <<"running">>} = RepairTask) ->
     Pool = get_pool(external, PgOpts),
     TaskTable = construct_table_name(NsId, "_tasks"),
     LocksTable = construct_table_name(NsId, "_locks"),
@@ -263,7 +289,7 @@ prepare_repair(PgOpts, NsId, ProcessId, RepairTask) ->
         fun(C) ->
             case try_lock_process(C, TaskTable, LocksTable, ProcessId, RepairTask) of
                 {ok, TaskId} ->
-                    {ok, TaskId};
+                    {ok, {continue, TaskId}};
                 error ->
                     {error, <<"process is running">>}
             end

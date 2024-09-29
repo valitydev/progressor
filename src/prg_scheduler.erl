@@ -11,19 +11,17 @@
 %% API
 -export([push_task/3]).
 -export([pop_task/2]).
+-export([count_workers/1]).
+-export([capture_worker/2]).
+-export([return_worker/3]).
+-export([release_worker/3]).
 -export([continuation_task/3]).
 
--record(prg_scheduler_state, {ns_id, ns_opts, ready, free_workers, rescan_timeout}).
+-record(prg_scheduler_state, {ns_id, ns_opts, ready, free_workers, owners}).
 
--dialyzer({nowarn_function, search_timers/3}).
--dialyzer({nowarn_function, search_calls/3}).
-
--define(CALLS_SCAN_KEY, progressor_calls_scanning_duration_ms).
--define(TIMERS_SCAN_KEY, progressor_timers_scanning_duration_ms).
-
-%%%
+%%%%%%%
 %%% API
-%%%
+%%%%%%%
 
 -spec push_task(namespace_id(), task_header(), task()) -> ok.
 push_task(NsId, TaskHeader, Task) ->
@@ -40,6 +38,26 @@ continuation_task(NsId, Worker, Task) ->
     RegName = prg_utils:registered_name(NsId, "_scheduler"),
     gen_server:call(RegName, {continuation_task, Worker, Task}).
 
+-spec count_workers(namespace_id()) -> non_neg_integer().
+count_workers(NsId) ->
+    RegName = prg_utils:registered_name(NsId, "_scheduler"),
+    gen_server:call(RegName, count_workers, infinity).
+
+-spec capture_worker(namespace_id(), pid()) -> {ok, pid()} | {error, not_found | nested_capture}.
+capture_worker(NsId, Owner) ->
+    RegName = prg_utils:registered_name(NsId, "_scheduler"),
+    gen_server:call(RegName, {capture_worker, Owner}, infinity).
+
+-spec return_worker(namespace_id(), pid(), pid()) -> ok.
+return_worker(NsId, Owner, Worker) ->
+    RegName = prg_utils:registered_name(NsId, "_scheduler"),
+    gen_server:cast(RegName, {return_worker, Owner, Worker}).
+
+-spec release_worker(namespace_id(), pid(), pid()) -> ok.
+release_worker(NsId, Owner, Pid) ->
+    RegName = prg_utils:registered_name(NsId, "_scheduler"),
+    gen_server:cast(RegName, {release_worker, Owner, Pid}).
+
 %%%===================================================================
 %%% Spawning and gen_server implementation
 %%%===================================================================
@@ -48,18 +66,15 @@ start_link({NsId, _NsOpts} = NS) ->
     RegName = prg_utils:registered_name(NsId, "_scheduler"),
     gen_server:start_link({local, RegName}, ?MODULE, NS, []).
 
-init({NsId, #{task_scan_timeout := RescanTimeoutSec} = Opts}) ->
+init({NsId, Opts}) ->
     _ = start_workers(NsId, Opts),
-    RescanTimeoutMs = RescanTimeoutSec  * 1000,
     State = #prg_scheduler_state{
         ns_id = NsId,
         ns_opts = Opts,
         ready = queue:new(),
         free_workers = queue:new(),
-        rescan_timeout = RescanTimeoutMs
+        owners = #{}
     },
-    _ = start_rescan_timers(RescanTimeoutMs),
-    _ = start_rescan_calls((RescanTimeoutMs div 3) + 1),
     {ok, State}.
 
 handle_call({pop_task, Worker}, _From, State) ->
@@ -69,6 +84,25 @@ handle_call({pop_task, Worker}, _From, State) ->
         {empty, _} ->
             Workers = State#prg_scheduler_state.free_workers,
             {reply, not_found, State#prg_scheduler_state{free_workers = queue:in(Worker, Workers)}}
+    end;
+handle_call(count_workers, _From, #prg_scheduler_state{free_workers = Workers} = State) ->
+    {reply, queue:len(Workers), State};
+handle_call(
+    {capture_worker, Owner}, _From,
+    #prg_scheduler_state{owners = Owners} = State
+) when erlang:is_map_key(Owner, Owners) ->
+    {reply, {error, nested_capture}, State};
+handle_call(
+    {capture_worker, Owner}, _From,
+    #prg_scheduler_state{owners = Owners} = State
+) ->
+    case queue:out(State#prg_scheduler_state.free_workers) of
+        {{value, Worker}, NewWorkers} ->
+            MRef = erlang:monitor(process, Owner),
+            NewOwners = Owners#{Owner => {MRef, Worker}},
+            {reply, {ok, Worker}, State#prg_scheduler_state{free_workers = NewWorkers, owners = NewOwners}};
+        {empty, _} ->
+            {reply, {error, not_found}, State}
     end;
 handle_call({continuation_task, Task}, _From, State) ->
     case queue:out(State#prg_scheduler_state.ready) of
@@ -85,47 +119,39 @@ handle_call(_Request, _From, State = #prg_scheduler_state{}) ->
 handle_cast({push_task, TaskHeader, Task}, State) ->
     NewState = do_push_task(TaskHeader, Task, State),
     {noreply, NewState};
+handle_cast(
+    {return_worker, Owner, Worker},
+    State = #prg_scheduler_state{free_workers = Workers, owners = Owners}
+) ->
+    case maps:get(Owner, Owners, undefined) of
+        undefined ->
+            skip;
+        {Ref, Worker} ->
+            _ = erlang:demonitor(Ref)
+    end,
+    NewWorkers = queue:in(Worker, Workers),
+    NewOwners = maps:without([Owner], Owners),
+    {noreply, State#prg_scheduler_state{free_workers = NewWorkers, owners = NewOwners}};
+handle_cast(
+    {release_worker, Owner, Worker},
+    State = #prg_scheduler_state{owners = Owners}
+) ->
+    NewState = case maps:get(Owner, Owners, undefined) of
+        undefined ->
+            State;
+        {Ref, Worker} ->
+            _ = erlang:demonitor(Ref),
+            State#prg_scheduler_state{owners = maps:without([Owner], Owners)}
+    end,
+    {noreply, NewState};
 handle_cast(_Request, State = #prg_scheduler_state{}) ->
     {noreply, State}.
 
 handle_info(
-    {timeout, _TimerRef, rescan_timers},
-    State = #prg_scheduler_state{ns_id = NsId, ns_opts = NsOpts, free_workers = Workers, rescan_timeout = RescanTimeout}
-) ->
-    NewState =
-        case queue:len(Workers) of
-            0 ->
-                %% all workers is busy
-                State;
-            N ->
-                Calls = search_calls(N, NsId, NsOpts),
-                Timers = search_timers(N - erlang:length(Calls), NsId, NsOpts),
-                Tasks = Calls ++ Timers,
-                lists:foldl(fun(#{task_type := Type} = Task, Acc) ->
-                    do_push_task(header(Type), Task, Acc)
-                end, State, Tasks)
-        end,
-    _ = start_rescan_timers(RescanTimeout),
-    {noreply, NewState};
-%%
-handle_info(
-    {timeout, _TimerRef, rescan_calls},
-    State = #prg_scheduler_state{ns_id = NsId, ns_opts = NsOpts, free_workers = Workers, rescan_timeout = RescanTimeout}
-) ->
-    NewState =
-        case queue:len(Workers) of
-            0 ->
-                %% all workers is busy
-                State;
-            N ->
-                Calls = search_calls(N, NsId, NsOpts),
-                lists:foldl(fun(#{task_type := Type} = Task, Acc) ->
-                    do_push_task(header(Type), Task, Acc)
-                end, State, Calls)
-        end,
-    _ = start_rescan_calls((RescanTimeout div 3) + 1),
-    {noreply, NewState};
-
+    {'DOWN', _Ref, process, Pid, _Info},
+    State = #prg_scheduler_state{owners = Owners}
+) when erlang:is_map_key(Pid, Owners) ->
+    {noreply, State#prg_scheduler_state{owners = maps:without([Pid], Owners)}};
 handle_info(_Info, State = #prg_scheduler_state{}) ->
     {noreply, State}.
 
@@ -146,51 +172,6 @@ start_workers(NsId, NsOpts) ->
         supervisor:start_child(WorkerSup, [N])
     end, lists:seq(1, WorkerPoolSize)).
 
-search_timers(
-    FreeWorkersCount,
-    NsId,
-    #{
-        storage := StorageOpts,
-        process_step_timeout := TimeoutSec,
-        task_scan_timeout := ScanTimeoutSec
-    }
-) ->
-    Fun = fun() ->
-        try
-            prg_storage:search_timers(StorageOpts, NsId, TimeoutSec + ScanTimeoutSec, FreeWorkersCount) of
-                Result when is_list(Result) ->
-                    Result;
-                Unexpected ->
-                    logger:error("search timers error: ~p", [Unexpected]),
-                    []
-        catch
-            Class:Reason:Trace ->
-                logger:error("search timers exception: ~p", [[Class, Reason, Trace]]),
-                []
-        end
-    end,
-    prg_utils:with_observe(Fun, ?TIMERS_SCAN_KEY, [erlang:atom_to_binary(NsId, utf8)]).
-
-search_calls(
-    FreeWorkersCount,
-    NsId,
-    #{storage := StorageOpts}
-) ->
-    Fun = fun() ->
-        try prg_storage:search_calls(StorageOpts, NsId, FreeWorkersCount) of
-            Result when is_list(Result) ->
-                Result;
-            Unexpected ->
-                logger:error("search calls error: ~p", [Unexpected]),
-                []
-        catch
-            Class:Reason:Trace ->
-                logger:error("search calls exception: ~p", [[Class, Reason, Trace]]),
-                []
-        end
-    end,
-    prg_utils:with_observe(Fun, ?CALLS_SCAN_KEY, [erlang:atom_to_binary(NsId, utf8)]).
-
 do_push_task(TaskHeader, Task, State) ->
     FreeWorkers = State#prg_scheduler_state.free_workers,
     case queue:out(FreeWorkers) of
@@ -205,15 +186,6 @@ do_push_task(TaskHeader, Task, State) ->
                 ready = queue:in({TaskHeader, Task}, OldReady)
             }
         end.
-
-start_rescan_timers(RescanTimeoutMs) ->
-    RandomDelta = rand:uniform(RescanTimeoutMs div 5),
-    erlang:start_timer(RescanTimeoutMs + RandomDelta, self(), rescan_timers).
-
-start_rescan_calls(RescanTimeoutMs) ->
-    RandomDelta = rand:uniform(RescanTimeoutMs div 5),
-    erlang:start_timer(RescanTimeoutMs + RandomDelta, self(), rescan_calls).
-%%
 
 header() ->
     header(<<"timeout">>).

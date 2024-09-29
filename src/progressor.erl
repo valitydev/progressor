@@ -7,7 +7,6 @@
 %% Public API
 -export([init/1]).
 -export([call/1]).
--export([notify/1]).
 -export([repair/1]).
 -export([get/1]).
 %% TODO
@@ -40,7 +39,7 @@ init(Req) ->
         fun add_ns_opts/1,
         fun check_idempotency/1,
         fun add_task/1,
-        fun prepare_init/1,
+        fun(Data) -> prepare(fun prg_storage:prepare_init/4, Data) end,
         fun process_call/1
     ], Req#{type => init}).
 
@@ -49,31 +48,20 @@ call(Req) ->
     prg_utils:pipe([
         fun add_ns_opts/1,
         fun check_idempotency/1,
-        fun(Opts) -> check_process_status(Opts, <<"running">>) end,
+        fun(Data) -> check_process_status(Data, <<"running">>) end,
         fun add_task/1,
-        fun prepare_call/1,
+        fun(Data) -> prepare(fun prg_storage:prepare_call/4, Data) end,
         fun process_call/1
     ], Req#{type => call}).
-
--spec notify(request()) -> {ok, _Result} | {error, _Reason}.
-notify(Req) ->
-    prg_utils:pipe([
-        fun add_ns_opts/1,
-        fun check_idempotency/1,
-        fun(Opts) -> check_process_status(Opts, <<"running">>) end,
-        fun add_task/1,
-        fun prepare_call/1,
-        fun process_notify/1
-    ], Req#{type => notify}).
 
 -spec repair(request()) -> {ok, _Result} | {error, _Reason}.
 repair(Req) ->
     prg_utils:pipe([
         fun add_ns_opts/1,
         fun check_idempotency/1,
-        fun(Opts) -> check_process_status(Opts, <<"error">>) end,
+        fun(Data) -> check_process_status(Data, <<"error">>) end,
         fun add_task/1,
-        fun prepare_repair/1,
+        fun(Data) -> prepare(fun prg_storage:prepare_repair/4, Data) end,
         fun process_call/1
     ], Req#{type => repair}).
 
@@ -128,14 +116,6 @@ add_task(#{id := Id, args := Args, type := Type} = Opts) ->
     Task = make_task(maybe_add_idempotency(TaskData, maps:get(idempotency_key, Opts, undefined))),
     Opts#{task => Task}.
 
-prepare_init(#{ns_opts := #{storage := StorageOpts}, ns := NsId, task := #{process_id := ProcessId} = InitTask} = Req) ->
-    case prg_storage:prepare_init(StorageOpts, NsId, new_process(ProcessId), InitTask) of
-        {ok, TaskId} ->
-            Req#{task => InitTask#{task_id => TaskId}};
-        {error, _Reason} = Error ->
-            Error
-    end.
-
 check_process_status(#{ns_opts := #{storage := StorageOpts}, id := Id, ns := NsId} = Opts, ExpectedStatus) ->
     case prg_storage:get_process_status(StorageOpts, NsId, Id) of
         {ok, ExpectedStatus} -> Opts;
@@ -143,11 +123,14 @@ check_process_status(#{ns_opts := #{storage := StorageOpts}, id := Id, ns := NsI
         {error, _} = Error -> Error
     end.
 
-prepare_call(#{ns_opts := #{storage := StorageOpts} = NsOpts, ns := NsId, id := ProcessId, task := Task} = Req) ->
-    case prg_storage:prepare_call(StorageOpts, NsId, ProcessId, Task) of
+prepare(Fun, #{ns_opts := #{storage := StorageOpts} = NsOpts, ns := NsId, id := ProcessId, task := Task} = Req) ->
+    Worker = capture_worker(NsId),
+    TaskStatus = check_for_run(Worker),
+    case Fun(StorageOpts, NsId, ProcessId, Task#{status => TaskStatus}) of
         {ok, {continue, TaskId}} ->
-            Req#{task => Task#{task_id => TaskId}};
+            Req#{task => Task#{task_id => TaskId}, worker => Worker};
         {ok, {postpone, TaskId}} ->
+            ok = return_worker(NsId, Worker),
             TimeoutSec = maps:get(process_step_timeout, NsOpts, ?DEFAULT_STEP_TIMEOUT_SEC),
             Timeout = TimeoutSec * 1000,
             case await_task_result(StorageOpts, NsId, {task_id, TaskId}, Timeout, 0) of
@@ -159,10 +142,6 @@ prepare_call(#{ns_opts := #{storage := StorageOpts} = NsOpts, ns := NsId, id := 
         {error, _} = Error ->
             Error
     end.
-
-prepare_repair(#{ns_opts := #{storage := StorageOpts}, ns := NsId, id := ProcessId, task := Task} = Opts) ->
-    {ok, TaskId} = prg_storage:prepare_repair(StorageOpts, NsId, ProcessId, Task),
-    Opts#{task => Task#{task_id => TaskId}}.
 
 get_task_result(#{ns_opts := #{storage := StorageOpts} = NsOpts, ns := NsId, idempotency_key := IdempotencyKey}) ->
     case prg_storage:get_task_result(StorageOpts, NsId, {idempotency_key, IdempotencyKey}) of
@@ -182,7 +161,7 @@ await_task_result(StorageOpts, NsId, KeyOrId, Timeout, Duration) ->
     case prg_storage:get_task_result(StorageOpts, NsId, KeyOrId) of
         {ok, Result} ->
             Result;
-        {error, in_progress} ->
+        {error, _} ->
             timer:sleep(?TASK_REPEAT_REQUEST_TIMEOUT),
             await_task_result(StorageOpts, NsId, KeyOrId, Timeout, Duration + ?TASK_REPEAT_REQUEST_TIMEOUT)
     end.
@@ -192,12 +171,13 @@ do_get_request(#{ns_opts := #{storage := StorageOpts}, id := Id, ns := NsId, arg
 do_get_request(#{ns_opts := #{storage := StorageOpts}, id := Id, ns := NsId}) ->
     prg_storage:get_process(external, StorageOpts, NsId, Id, #{}).
 
-process_call(#{ns := NsId, ns_opts := NsOpts, type := Type, task := Task}) ->
+process_call(#{ns_opts := NsOpts, ns := NsId, type := Type, task := Task, worker := Worker}) ->
     TimeoutSec = maps:get(process_step_timeout, NsOpts, ?DEFAULT_STEP_TIMEOUT_SEC),
     Timeout = TimeoutSec * 1000,
     Ref = make_ref(),
     TaskHeader = make_task_header(Type, Ref),
-    ok = prg_scheduler:push_task(NsId, TaskHeader, Task),
+    ok = prg_worker:process_task(Worker, TaskHeader, Task),
+    ok = prg_scheduler:release_worker(NsId, self(), Worker),
     %% see fun reply/2
     receive
         {Ref, {error, {exception, Class, Term}}} ->
@@ -207,10 +187,6 @@ process_call(#{ns := NsId, ns_opts := NsOpts, type := Type, task := Task}) ->
     after Timeout ->
         {error, <<"timeout">>}
     end.
-
-process_notify(#{ns := NsId, type := Type, task := Task}) ->
-    TaskHeader = make_task_header(Type, undef),
-    ok = prg_scheduler:push_task(NsId, TaskHeader, Task).
 
 make_task_header(init, Ref) ->
     {init, {self(), Ref}};
@@ -261,8 +237,18 @@ make_task(#{task_type := <<"notify">>} = TaskData) ->
     },
     maps:merge(Defaults, TaskData).
 
-new_process(ProcessId) ->
-    #{
-        process_id => ProcessId,
-        status => <<"running">>
-    }.
+capture_worker(NsId) ->
+    case prg_scheduler:capture_worker(NsId, self()) of
+        {ok, Worker} -> Worker;
+        {error, _} -> undefined
+    end.
+
+return_worker(_NsId, undefined) ->
+    ok;
+return_worker(NsId, Worker) ->
+    prg_scheduler:return_worker(NsId, self(), Worker).
+
+check_for_run(undefined) ->
+    <<"waiting">>;
+check_for_run(Pid) when is_pid(Pid) ->
+    <<"running">>.

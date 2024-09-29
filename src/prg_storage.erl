@@ -49,16 +49,18 @@ get_task_result(#{client := prg_pg_backend, options := PgOpts}, NsId, KeyOrId) -
 get_process_status(#{client := prg_pg_backend, options := PgOpts}, NsId, Id) ->
     prg_pg_backend:get_process_status(PgOpts, NsId, Id).
 
--spec prepare_init(storage_opts(), namespace_id(), process(), task()) -> {ok, task_id()} | {error, _Reason}.
-prepare_init(#{client := prg_pg_backend, options := PgOpts}, NsId, Process, InitTask) ->
-    prg_pg_backend:prepare_init(PgOpts, NsId, Process, InitTask).
+-spec prepare_init(storage_opts(), namespace_id(), id(), task()) ->
+    {ok, {postpone, task_id()} | {continue, task_id()}} | {error, _Reason}.
+prepare_init(#{client := prg_pg_backend, options := PgOpts}, NsId, ProcessId, InitTask) ->
+    prg_pg_backend:prepare_init(PgOpts, NsId, ?NEW_PROCESS(ProcessId), InitTask).
 
 -spec prepare_call(storage_opts(), namespace_id(), id(), task()) ->
     {ok, {postpone, task_id()} | {continue, task_id()}} | {error, _Error}.
 prepare_call(#{client := prg_pg_backend, options := PgOpts}, NsId, ProcessId, Task) ->
     prg_pg_backend:prepare_call(PgOpts, NsId, ProcessId, Task).
 
--spec prepare_repair(storage_opts(), namespace_id(), id(), task()) -> {ok, task_id()} | {error, _Reason}.
+-spec prepare_repair(storage_opts(), namespace_id(), id(), task()) ->
+    {ok, {postpone, task_id()} | {continue, task_id()}} | {error, _Reason}.
 prepare_repair(#{client := prg_pg_backend, options := PgOpts}, NsId, ProcessId, RepairTask) ->
     prg_pg_backend:prepare_repair(PgOpts, NsId, ProcessId, RepairTask).
 

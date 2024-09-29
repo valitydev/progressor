@@ -27,7 +27,7 @@
 -type args() :: term().
 -type request() :: {task_t(), args(), process()}.
 
--record(prg_processor_state, {}).
+-record(prg_sidecar_state, {}).
 
 -define(DEFAULT_DELAY, 3000).
 -define(PROCESSING_KEY, progressor_task_processing_duration_ms).
@@ -161,7 +161,7 @@ start_link() ->
     gen_server:start_link(?MODULE, [], []).
 
 init([]) ->
-    {ok, #prg_processor_state{}}.
+    {ok, #prg_sidecar_state{}}.
 
 handle_call(
     {
@@ -171,7 +171,7 @@ handle_call(
         Ctx
     },
     _From,
-    State = #prg_processor_state{}
+    State = #prg_sidecar_state{}
 ) ->
     Response =
         try Handler:process(Request, Options, Ctx) of
@@ -190,7 +190,7 @@ handle_call(
 handle_call(
     {complete_and_continue, StorageOpts, NsId, TaskResult, Process, Events, Task},
     _From,
-    State = #prg_processor_state{}
+    State = #prg_sidecar_state{}
 ) ->
     Fun = fun() ->
         prg_storage:complete_and_continue(StorageOpts, NsId, TaskResult, Process, Events, Task)
@@ -201,7 +201,7 @@ handle_call(
 handle_call(
     {remove_process, StorageOpts, NsId, ProcessId},
     _From,
-    State = #prg_processor_state{}
+    State = #prg_sidecar_state{}
 ) ->
     Fun = fun() ->
         prg_storage:remove_process(StorageOpts, NsId, ProcessId)
@@ -212,7 +212,7 @@ handle_call(
 handle_call(
     {get_process, StorageOpts, NsId, ProcessId},
     _From,
-    State = #prg_processor_state{}
+    State = #prg_sidecar_state{}
 ) ->
     Fun = fun() ->
         prg_storage:get_process(StorageOpts, NsId, ProcessId)
@@ -223,7 +223,7 @@ handle_call(
 handle_call(
     {get_task, StorageOpts, NsId, TaskId},
     _From,
-    State = #prg_processor_state{}
+    State = #prg_sidecar_state{}
 ) ->
     Fun = fun() ->
         prg_storage:get_task(StorageOpts, NsId, TaskId)
@@ -234,7 +234,7 @@ handle_call(
 handle_call(
     {complete_and_suspend, StorageOpts, NsId, TaskResult, Process, Events},
     _From,
-    State = #prg_processor_state{}
+    State = #prg_sidecar_state{}
 ) ->
     Fun = fun() ->
         prg_storage:complete_and_suspend(StorageOpts, NsId, TaskResult, Process, Events)
@@ -245,7 +245,7 @@ handle_call(
 handle_call(
     {complete_and_unlock, StorageOpts, NsId, TaskResult, Process, Events},
     _From,
-    State = #prg_processor_state{}
+    State = #prg_sidecar_state{}
 ) ->
     Fun = fun() ->
         prg_storage:complete_and_unlock(StorageOpts, NsId, TaskResult, Process, Events)
@@ -256,7 +256,7 @@ handle_call(
 handle_call(
     {complete_and_error, StorageOpts, NsId, TaskResult, Process},
     _From,
-    State = #prg_processor_state{}
+    State = #prg_sidecar_state{}
 ) ->
     Fun = fun() ->
         prg_storage:complete_and_error(StorageOpts, NsId, TaskResult, Process)
@@ -274,16 +274,16 @@ handle_call({lifecycle_sink, NsOpts, TaskType, ProcessId}, _From, State) ->
     Response = do_with_retry(Fun, ?DEFAULT_DELAY),
     {reply, Response, State}.
 
-handle_cast(_Request, State = #prg_processor_state{}) ->
+handle_cast(_Request, State = #prg_sidecar_state{}) ->
     {noreply, State}.
 
-handle_info(_Info, State = #prg_processor_state{}) ->
+handle_info(_Info, State = #prg_sidecar_state{}) ->
     {noreply, State}.
 
-terminate(_Reason, _State = #prg_processor_state{}) ->
+terminate(_Reason, _State = #prg_sidecar_state{}) ->
     ok.
 
-code_change(_OldVsn, State = #prg_processor_state{}, _Extra) ->
+code_change(_OldVsn, State = #prg_sidecar_state{}, _Extra) ->
     {ok, State}.
 
 %%%===================================================================

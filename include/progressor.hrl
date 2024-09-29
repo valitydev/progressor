@@ -143,3 +143,8 @@
 -define(DEFAULT_WORKER_POOL_SIZE, 10).
 
 -define(EPOCH_DIFF, 62167219200).
+
+-define(NEW_PROCESS(ID), #{
+    process_id => ProcessId,
+    status => <<"running">>
+}).

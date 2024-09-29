@@ -34,6 +34,10 @@ init({NsId, _NsOpts} = NS) ->
         id => prg_utils:registered_name(NsId, "_scheduler"),
         start => {prg_scheduler, start_link, [NS]}
     },
+    ScannerSpec = #{
+        id => prg_utils:registered_name(NsId, "_scanner"),
+        start => {prg_scanner, start_link, [NS]}
+    },
     WorkerSupSpec = #{
         id => prg_utils:registered_name(NsId, "_worker_sup"),
         start => {prg_worker_sup, start_link, [NS]},
@@ -41,7 +45,8 @@ init({NsId, _NsOpts} = NS) ->
     },
     Specs = [
         WorkerSupSpec,
-        SchedulerSpec
+        SchedulerSpec,
+        ScannerSpec
     ],
 
     {ok, {SupFlags, Specs}}.
