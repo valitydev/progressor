@@ -3,6 +3,7 @@
 -include("progressor.hrl").
 
 -define(TASK_REPEAT_REQUEST_TIMEOUT, 1000).
+-define(PREPARING_KEY, progressor_request_preparing_duration_ms).
 
 %% Public API
 -export([init/1]).
@@ -126,7 +127,13 @@ check_process_status(#{ns_opts := #{storage := StorageOpts}, id := Id, ns := NsI
 prepare(Fun, #{ns_opts := #{storage := StorageOpts} = NsOpts, ns := NsId, id := ProcessId, task := Task} = Req) ->
     Worker = capture_worker(NsId),
     TaskStatus = check_for_run(Worker),
-    case Fun(StorageOpts, NsId, ProcessId, Task#{status => TaskStatus}) of
+    TaskType = maps:get(task_type, Task),
+    PrepareResult = prg_utils:with_observe(
+        fun() -> Fun(StorageOpts, NsId, ProcessId, Task#{status => TaskStatus}) end,
+        ?PREPARING_KEY,
+        [erlang:atom_to_binary(NsId, utf8), TaskType]
+    ),
+    case PrepareResult of
         {ok, {continue, TaskId}} ->
             Req#{task => Task#{task_id => TaskId}, worker => Worker};
         {ok, {postpone, TaskId}} ->

@@ -772,13 +772,13 @@ expect_steps_counter(ExpectedSteps, CurrentStep) ->
     receive
         iterate when CurrentStep + 1 =:= ExpectedSteps ->
             %% wait storage
-            timer:sleep(20),
+            timer:sleep(50),
             ExpectedSteps;
         iterate ->
             expect_steps_counter(ExpectedSteps, CurrentStep + 1);
         Counter when Counter =:= ExpectedSteps ->
             %% wait storage
-            timer:sleep(20),
+            timer:sleep(50),
             Counter;
         Counter ->
             expect_steps_counter(ExpectedSteps, Counter)

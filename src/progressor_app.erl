@@ -35,8 +35,15 @@ create_metrics() ->
     ]),
 
     _ = prometheus_histogram:new([
+        {name, progressor_zombie_collection_duration_ms},
+        {help, "Zombie tasks collecting durations in millisecond"},
+        {buckets, [50, 150, 300, 500, 750, 1000]},
+        {labels, [namespace]}
+    ]),
+
+    _ = prometheus_histogram:new([
         {name, progressor_request_preparing_duration_ms},
-        {help, "Preparing request (init, call, repair, get) durations in millisecond"},
+        {help, "Preparing request (init, call, repair) durations in millisecond"},
         {buckets, [50, 150, 300, 500, 750, 1000]},
         {labels, [namespace, task_type]}
     ]),

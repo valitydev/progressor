@@ -64,8 +64,10 @@
     options => term()
 }.
 
+-type storage_handler() :: prg_pg_backend | prg_pg_backend2.
+
 -type storage_opts() :: #{
-    client := module(),
+    client := storage_handler(),
     options => term()
 }.
 

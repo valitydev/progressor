@@ -148,7 +148,7 @@ get_process(Pid, _Deadline, StorageOpts, NsId, ProcessId) ->
     gen_server:call(Pid, {get_process, StorageOpts, NsId, ProcessId}, infinity).
 
 -spec get_task(pid(), timestamp_ms(), storage_opts(), namespace_id(), task_id()) ->
-    {ok, process()} | {error, _Reason}.
+    {ok, task()} | {error, _Reason}.
 get_task(Pid, _Deadline, StorageOpts, NsId, TaskId) ->
     %% Timeout = Deadline - erlang:system_time(millisecond),
     gen_server:call(Pid, {get_task, StorageOpts, NsId, TaskId}, infinity).

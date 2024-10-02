@@ -38,7 +38,7 @@ app_env(progressor) ->
     [
         {defaults, #{
             storage => #{
-                client => prg_pg_backend,
+                client => prg_pg_backend2,
                 options => #{
                     pool => default_pool
                 }
@@ -56,7 +56,7 @@ app_env(progressor) ->
                     {temporary, unavilable}
                 ]
             },
-            task_scan_timeout => 3, %% seconds
+            task_scan_timeout => 1, %% seconds
             worker_pool_size => 10,
             process_step_timeout => 10 %% seconds
         }},

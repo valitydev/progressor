@@ -6,10 +6,11 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2,
     code_change/3]).
 
--record(prg_scanner_state, {ns_id, ns_opts, rescan_timeout}).
+-record(prg_scanner_state, {ns_id, ns_opts, rescan_timeout, step_timeout}).
 
 -define(CALLS_SCAN_KEY, progressor_calls_scanning_duration_ms).
 -define(TIMERS_SCAN_KEY, progressor_timers_scanning_duration_ms).
+-define(ZOMBIE_COLLECTION_KEY, progressor_zombie_collection_duration_ms).
 
 -dialyzer({nowarn_function, search_timers/3}).
 -dialyzer({nowarn_function, search_calls/3}).
@@ -22,15 +23,18 @@ start_link({NsId, _NsOpts} = NS) ->
     RegName = prg_utils:registered_name(NsId, "_scanner"),
     gen_server:start_link({local, RegName}, ?MODULE, NS, []).
 
-init({NsId, #{task_scan_timeout := RescanTimeoutSec} = Opts}) ->
+init({NsId, #{task_scan_timeout := RescanTimeoutSec, process_step_timeout := StepTimeoutSec} = Opts}) ->
     RescanTimeoutMs = RescanTimeoutSec  * 1000,
+    StepTimeoutMs = StepTimeoutSec * 1000,
     State = #prg_scanner_state{
         ns_id = NsId,
         ns_opts = Opts,
-        rescan_timeout = RescanTimeoutMs
+        rescan_timeout = RescanTimeoutMs,
+        step_timeout = StepTimeoutMs
     },
     _ = start_rescan_timers(RescanTimeoutMs),
-    _ = start_rescan_calls((RescanTimeoutMs div 3) + 1),
+    _ = start_rescan_calls((RescanTimeoutMs div 3) + 100),
+    _ = start_zombie_collector(StepTimeoutMs),
     {ok, State}.
 
 handle_call(_Request, _From, State) ->
@@ -73,6 +77,13 @@ handle_info(
     end,
     _ = start_rescan_calls((RescanTimeout div 3) + 1),
     {noreply, State};
+handle_info(
+    {timeout, _TimerRef, collect_zombie},
+    State = #prg_scanner_state{ns_id = NsId, ns_opts = NsOpts, step_timeout = StepTimeout}
+) ->
+    ok = collect_zombie(NsId, NsOpts),
+    _ = start_zombie_collector(StepTimeout),
+    {noreply, State};
 handle_info(_Info, State = #prg_scanner_state{}) ->
     {noreply, State}.
 
@@ -93,6 +104,10 @@ start_rescan_timers(RescanTimeoutMs) ->
 start_rescan_calls(RescanTimeoutMs) ->
     RandomDelta = rand:uniform(RescanTimeoutMs div 5),
     erlang:start_timer(RescanTimeoutMs + RandomDelta, self(), rescan_calls).
+
+start_zombie_collector(RescanTimeoutMs) ->
+    RandomDelta = rand:uniform(RescanTimeoutMs div 5),
+    erlang:start_timer(RescanTimeoutMs + RandomDelta, self(), collect_zombie).
 
 search_timers(
     FreeWorkersCount,
@@ -138,6 +153,24 @@ search_calls(
         end
     end,
     prg_utils:with_observe(Fun, ?CALLS_SCAN_KEY, [erlang:atom_to_binary(NsId, utf8)]).
+
+collect_zombie(
+    NsId,
+    #{
+        storage := StorageOpts,
+        process_step_timeout := TimeoutSec,
+        task_scan_timeout := ScanTimeoutSec
+    }
+) ->
+    Fun = fun() ->
+        try prg_storage:collect_zombies(StorageOpts, NsId, TimeoutSec + ScanTimeoutSec)
+        catch
+            Class:Reason:Trace ->
+                logger:error("zombie collection exception: ~p", [[Class, Reason, Trace]])
+        end,
+        ok
+    end,
+    prg_utils:with_observe(Fun, ?ZOMBIE_COLLECTION_KEY, [erlang:atom_to_binary(NsId, utf8)]).
 
 header(Type) ->
     {erlang:binary_to_atom(Type), undefined}.

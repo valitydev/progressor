@@ -278,20 +278,30 @@ handle_result(
         finished_time => erlang:system_time(second),
         status => <<"finished">>
     },
-    {ok, Task} = prg_worker_sidecar:get_task(Pid, Deadline, StorageOpts, NsId, ErrorTaskId),
-    NewTask0 = maps:with([process_id, task_type, scheduled_time, args, metadata, context], Task),
-    NewTask = NewTask0#{
-        status => <<"running">>,
-        running_time => Now,
-        last_retry_interval => 0,
-        attempts_count => 0
-    },
-    {ok, [ContinuationTask | _]} = prg_worker_sidecar:complete_and_continue(Pid, Deadline, StorageOpts, NsId,
-        TaskResult, ProcessUpdated, Events, NewTask),
-    _ = maybe_reply(TaskHeader, Response),
-    NewHistory = maps:get(history, Process) ++ Events,
-    ok = continuation_task(self(), create_header(ContinuationTask), ContinuationTask),
-    State#prg_worker_state{process = ProcessUpdated#{history => NewHistory}};
+    {ok, ErrorTask} = prg_worker_sidecar:get_task(Pid, Deadline, StorageOpts, NsId, ErrorTaskId),
+    case ErrorTask of
+        #{task_type := Type} when Type =:= <<"timeout">>; Type =:= <<"remove">> ->
+            %% machinegun legacy behaviour
+            NewTask0 = maps:with([process_id, task_type, scheduled_time, args, metadata, context], ErrorTask),
+            NewTask = NewTask0#{
+                status => <<"running">>,
+                running_time => Now,
+                last_retry_interval => 0,
+                attempts_count => 0
+            },
+            {ok, [ContinuationTask | _]} = prg_worker_sidecar:complete_and_continue(Pid, Deadline, StorageOpts, NsId,
+                TaskResult, ProcessUpdated, Events, NewTask),
+            _ = maybe_reply(TaskHeader, Response),
+            NewHistory = maps:get(history, Process) ++ Events,
+            ok = continuation_task(self(), create_header(ContinuationTask), ContinuationTask),
+            State#prg_worker_state{process = ProcessUpdated#{history => NewHistory}};
+        _ ->
+            {ok, []} = prg_worker_sidecar:complete_and_unlock(Pid, Deadline, StorageOpts, NsId, TaskResult,
+                ProcessUpdated, Events),
+            _ = maybe_reply(TaskHeader, Response),
+            ok = next_task(self()),
+            State#prg_worker_state{process = undefined}
+    end;
 
 %% success result with undefined action
 handle_result(
