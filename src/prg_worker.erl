@@ -454,7 +454,27 @@ check_retryable(TaskHeader, #{last_retry_interval := LastInterval} = Task, Retry
             not_retryable
     end.
 
-is_retryable({exception, _, _}, _TaskHeader, _RetryPolicy, _Timeout, _Attempts) ->
+%% machinegun legacy
+is_retryable(
+    {exception, _, {woody_error, {_, result_unexpected, _}}} = _Error,
+    _TaskHeader,
+    _RetryPolicy,
+    _Timeout,
+    _Attempts
+) ->
+    false;
+is_retryable(
+    {exception, _, {woody_error, {_, Class, _}}} = Error,
+    {timeout, undefined},
+    RetryPolicy,
+    Timeout,
+    Attempts
+) when Class =:= resource_unavailable orelse Class =:= result_unknown ->
+    Timeout < maps:get(max_timeout, RetryPolicy, infinity) andalso
+        Attempts < maps:get(max_attempts, RetryPolicy, infinity) andalso
+        not lists:any(fun(E) -> Error =:= E end, maps:get(non_retryable_errors, RetryPolicy, []));
+
+is_retryable({exception, _, _} = _Error, _TaskHeader, _RetryPolicy, _Timeout, _Attempts) ->
     false;
 is_retryable(Error, {timeout, undefined}, RetryPolicy, Timeout, Attempts) ->
     Timeout < maps:get(max_timeout, RetryPolicy, infinity) andalso

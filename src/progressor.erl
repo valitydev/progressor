@@ -187,8 +187,6 @@ process_call(#{ns_opts := NsOpts, ns := NsId, type := Type, task := Task, worker
     ok = prg_scheduler:release_worker(NsId, self(), Worker),
     %% see fun reply/2
     receive
-        {Ref, {error, {exception, Class, Term}}} ->
-            erlang:raise(Class, {woody_error, {external, result_unexpected, prg_utils:format(Term)}}, []);
         {Ref, Result} ->
             Result
     after Timeout ->

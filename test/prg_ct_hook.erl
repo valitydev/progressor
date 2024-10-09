@@ -38,7 +38,7 @@ app_env(progressor) ->
     [
         {defaults, #{
             storage => #{
-                client => prg_pg_backend2,
+                client => prg_pg_backend,
                 options => #{
                     pool => default_pool
                 }
