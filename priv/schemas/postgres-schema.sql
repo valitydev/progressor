@@ -22,7 +22,6 @@ CREATE TABLE IF NOT EXISTS default_tasks(
     "metadata" JSONB,
     "idempotency_key" VARCHAR(80) UNIQUE,
     "response" BYTEA,
-    "blocked_task" BIGINT REFERENCES default_tasks ("task_id"),
     "last_retry_interval" INTEGER NOT NULL,
     "attempts_count" SMALLINT NOT NULL,
     "context" BYTEA,
@@ -31,10 +30,34 @@ CREATE TABLE IF NOT EXISTS default_tasks(
 
 ALTER TABLE default_processes ADD COLUMN IF NOT EXISTS "corrupted_by" BIGINT REFERENCES default_tasks("task_id");
 
-CREATE TABLE IF NOT EXISTS "default_locks"(
+CREATE TABLE IF NOT EXISTS default_schedule(
+    "task_id" BIGINT PRIMARY KEY,
+    "process_id" VARCHAR(80) NOT NULL,
+    "task_type" task_type NOT NULL,
+    "status" task_status NOT NULL,
+    "scheduled_time" TIMESTAMP WITH TIME ZONE NOT NULL,
+    "args" BYTEA,
+    "metadata" JSONB,
+    "last_retry_interval" INTEGER NOT NULL,
+    "attempts_count" SMALLINT NOT NULL,
+    "context" BYTEA,
+    FOREIGN KEY ("process_id") REFERENCES default_processes ("process_id"),
+    FOREIGN KEY ("task_id") REFERENCES "default_tasks" ("task_id")
+);
+
+CREATE TABLE IF NOT EXISTS default_running(
     "process_id" VARCHAR(80) PRIMARY KEY,
     "task_id" BIGINT NOT NULL,
-    FOREIGN KEY ("process_id") REFERENCES "default_processes" ("process_id"),
+    "task_type" task_type NOT NULL,
+    "status" task_status NOT NULL,
+    "scheduled_time" TIMESTAMP WITH TIME ZONE NOT NULL,
+    "running_time" TIMESTAMP WITH TIME ZONE NOT NULL,
+    "args" BYTEA,
+    "metadata" JSONB,
+    "last_retry_interval" INTEGER NOT NULL,
+    "attempts_count" SMALLINT NOT NULL,
+    "context" BYTEA,
+    FOREIGN KEY ("process_id") REFERENCES default_processes ("process_id"),
     FOREIGN KEY ("task_id") REFERENCES "default_tasks" ("task_id")
 );
 
