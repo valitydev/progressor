@@ -544,6 +544,7 @@ db_init(#{pool := Pool}, NsId) ->
                 "status process_status NOT NULL, "
                 "detail TEXT, "
                 "aux_state BYTEA, "
+                "created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(), "
                 "metadata JSONB)"
             ),
             %% create tasks table
