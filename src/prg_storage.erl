@@ -8,6 +8,7 @@
 -export([prepare_init/4]).
 -export([prepare_call/4]).
 -export([prepare_repair/4]).
+-export([put_process_data/4]).
 
 %% scan functions
 -export([search_timers/4]).
@@ -47,6 +48,11 @@ get_task_result(#{client := Handler, options := HandlerOpts}, NsId, KeyOrId) ->
 -spec get_process_status(storage_opts(), namespace_id(), id()) -> {ok, _Result} | {error, _Reason}.
 get_process_status(#{client := Handler, options := HandlerOpts}, NsId, Id) ->
     Handler:get_process_status(HandlerOpts, NsId, Id).
+
+-spec put_process_data(storage_opts(), namespace_id(), id(), #{process := process(), task => task()}) ->
+    {ok, _Result} | {error, _Reason}.
+put_process_data(#{client := Handler, options := HandlerOpts}, NsId, Id, ProcessData) ->
+    Handler:put_process_data(HandlerOpts, NsId, Id, ProcessData).
 
 -spec prepare_init(storage_opts(), namespace_id(), id(), task()) ->
     {ok, {postpone, task_id()} | {continue, task_id()}} | {error, _Reason}.

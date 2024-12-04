@@ -22,6 +22,7 @@
 -export([repair_after_call_error_test/1]).
 -export([remove_by_timer_test/1]).
 -export([remove_without_timer_test/1]).
+-export([put_process_test/1]).
 
 -define(NS, 'default/default').
 
@@ -43,7 +44,8 @@ all() -> [
     error_after_max_retries_test,
     repair_after_call_error_test,
     remove_by_timer_test,
-    remove_without_timer_test
+    remove_without_timer_test,
+    put_process_test
 ].
 
 -spec simple_timers_test(_) -> _.
@@ -440,6 +442,50 @@ remove_without_timer_test(_C) ->
     }} = progressor:get(#{ns => ?NS, id => Id}),
     2 = expect_steps_counter(2),
     {error, <<"process not found">>} = progressor:get(#{ns => ?NS, id => Id}),
+    ok.
+%%
+-spec put_process_test(_C) -> _.
+put_process_test(_C) ->
+    Id = gen_id(),
+    Args = #{
+        process_id => Id,
+        status => <<"running">>,
+        history => [
+            event(1),
+            event(2),
+            event(3)
+        ]
+    },
+    {ok, ok} = progressor:put(#{ns => ?NS, id => Id, args => Args}),
+    {ok,#{
+         process_id := Id,
+        status := <<"running">>,
+        history := [
+            #{
+                metadata := #{<<"format_version">> := 1},
+                process_id := Id,
+                event_id := 1,
+                timestamp := _Ts1,
+                payload := _Pl1
+            },
+            #{
+                timestamp := _Ts2,
+                metadata := #{<<"format_version">> := 1},
+                process_id := Id,
+                event_id := 2,
+                payload := _Pl2
+            },
+            #{
+                timestamp := _Ts3,
+                metadata := #{<<"format_version">> := 1},
+                process_id := Id,
+                event_id := 3,
+                payload := _Pl3
+            }
+        ]
+    }} = progressor:get(#{ns => ?NS, id => Id}),
+
+    {error, <<"process already exists">>} = progressor:put(#{ns => ?NS, id => Id, args => Args}),
     ok.
 
 %%%%%%%%%%%%%%%%%%%%%

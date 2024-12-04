@@ -11,6 +11,7 @@
 -export([prepare_init/4]).
 -export([prepare_call/4]).
 -export([prepare_repair/4]).
+-export([put_process_data/4]).
 
 %% scan functions
 -export([collect_zombies/3]).
@@ -105,6 +106,37 @@ get_process(Recipient, PgOpts, NsId, ProcessId, HistoryRange) ->
             ),
             {ok, Proc#{history => Events}}
     end.
+
+-spec put_process_data(pg_opts(), namespace_id(), id(), #{process := process(), task => task()}) ->
+    {ok, _Result} | {error, _Reason}.
+put_process_data(PgOpts, NsId, ProcessId, ProcessData) ->
+    #{
+        process := #{
+            history := Events
+        } = Process,
+        task := Task
+    } = ProcessData,
+    Pool = get_pool(external, PgOpts),
+    #{
+        processes := ProcessesTable,
+        tasks := TaskTable,
+        events := EventsTable
+    } = tables(NsId),
+    epg_pool:transaction(
+        Pool,
+        fun(Connection) ->
+            case do_save_process(Connection, ProcessesTable, Process) of
+                {ok, _} ->
+                    {ok, _, _, [{TaskId}]} = do_save_task(Connection, TaskTable, Task),
+                    lists:foreach(fun(Ev) ->
+                        {ok, _} = do_save_event(Connection, EventsTable, ProcessId, TaskId, Ev)
+                    end, Events),
+                    {ok, ok};
+                {error, #error{codename = unique_violation}} ->
+                    {error, <<"process already exists">>}
+            end
+        end
+    ).
 
 -spec remove_process(pg_opts(), namespace_id(), id()) -> ok | no_return().
 remove_process(PgOpts, NsId, ProcessId) ->
@@ -719,7 +751,6 @@ do_save_task(Connection, Table, Task, Returning) ->
         process_id := ProcessId,
         task_type := TaskType,
         status := Status,
-        scheduled_time := ScheduledTs,
         last_retry_interval := LastRetryInterval,
         attempts_count := AttemptsCount
     } = Task,
@@ -727,17 +758,19 @@ do_save_task(Connection, Table, Task, Returning) ->
     MetaData = maps:get(metadata, Task, null),
     IdempotencyKey = maps:get(idempotency_key, Task, null),
     BlockedTask = maps:get(blocked_task, Task, null),
-    RunningTs = maps:get(running_time, Task, null),
+    ScheduledTs = unixtime_to_datetime(maps:get(scheduled_time, Task, null)),
+    RunningTs = unixtime_to_datetime(maps:get(running_time, Task, null)),
+    FinishedTs = unixtime_to_datetime(maps:get(finished_time, Task, null)),
     Response = maps:get(response, Task, null),
     Context = maps:get(context, Task, <<>>),
     epg_pool:query(
         Connection,
         "INSERT INTO " ++ Table ++ " "
-        "  (process_id, task_type, status, scheduled_time, running_time, args, "
+        "  (process_id, task_type, status, scheduled_time, running_time, finished_time, args, "
         "   metadata, idempotency_key, blocked_task, response, last_retry_interval, attempts_count, context)"
-        "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING " ++ Returning,
+        "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING " ++ Returning,
         [
-            ProcessId, TaskType, Status, unixtime_to_datetime(ScheduledTs), unixtime_to_datetime(RunningTs), Args,
+            ProcessId, TaskType, Status, ScheduledTs, RunningTs, FinishedTs, Args,
             json_encode(MetaData), IdempotencyKey, BlockedTask, Response, LastRetryInterval, AttemptsCount, Context
         ]
     ).
