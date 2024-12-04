@@ -10,6 +10,7 @@
 -export([call/1]).
 -export([repair/1]).
 -export([get/1]).
+-export([put/1]).
 %% TODO
 %% -export([remove/1]).
 
@@ -70,7 +71,14 @@ repair(Req) ->
 get(Req) ->
     prg_utils:pipe([
         fun add_ns_opts/1,
-        fun do_get_request/1
+        fun do_get/1
+    ], Req).
+
+-spec put(request()) -> {ok, _Result} | {error, _Reason}.
+put(Req) ->
+    prg_utils:pipe([
+        fun add_ns_opts/1,
+        fun do_put/1
     ], Req).
 
 %-ifdef(TEST).
@@ -106,8 +114,9 @@ check_idempotency(#{idempotency_key := _IdempotencyKey} = Req) ->
 check_idempotency(Req) ->
     Req.
 
-add_task(#{id := Id, args := Args, type := Type} = Opts) ->
+add_task(#{id := Id, type := Type} = Opts) ->
     Context = maps:get(context, Opts, <<>>),
+    Args = maps:get(args, Opts, <<>>),
     TaskData = #{
         process_id => Id,
         args => Args,
@@ -173,10 +182,32 @@ await_task_result(StorageOpts, NsId, KeyOrId, Timeout, Duration) ->
             await_task_result(StorageOpts, NsId, KeyOrId, Timeout, Duration + ?TASK_REPEAT_REQUEST_TIMEOUT)
     end.
 
-do_get_request(#{ns_opts := #{storage := StorageOpts}, id := Id, ns := NsId, args := HistoryRange}) ->
+do_get(#{ns_opts := #{storage := StorageOpts}, id := Id, ns := NsId, args := HistoryRange}) ->
     prg_storage:get_process(external, StorageOpts, NsId, Id, HistoryRange);
-do_get_request(#{ns_opts := #{storage := StorageOpts}, id := Id, ns := NsId}) ->
+do_get(#{ns_opts := #{storage := StorageOpts}, id := Id, ns := NsId}) ->
     prg_storage:get_process(external, StorageOpts, NsId, Id, #{}).
+
+do_put(#{ns_opts := #{storage := StorageOpts}, id := Id, ns := NsId, args := Process}= Opts) ->
+    #{
+        process_id := ProcessId
+    } = Process,
+    Context = maps:get(context, Opts, <<>>),
+    Now = erlang:system_time(second),
+    Task = #{
+        process_id => ProcessId,
+        task_type => <<"init">>,
+        status => <<"finished">>,
+        args => <<>>,
+        context => Context,
+        response => term_to_binary({ok, ok}),
+        scheduled_time => Now,
+        running_time => Now,
+        finished_time => Now,
+        last_retry_interval => 0,
+        attempts_count => 0
+    },
+    prg_storage:put_process_data(StorageOpts, NsId, Id, #{process => Process, task => Task}).
+
 
 process_call(#{ns_opts := NsOpts, ns := NsId, type := Type, task := Task, worker := Worker}) ->
     TimeoutSec = maps:get(process_step_timeout, NsOpts, ?DEFAULT_STEP_TIMEOUT_SEC),
