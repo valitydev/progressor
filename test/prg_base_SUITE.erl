@@ -23,6 +23,8 @@
 -export([remove_by_timer_test/1]).
 -export([remove_without_timer_test/1]).
 -export([put_process_test/1]).
+-export([put_process_with_timeout_test/1]).
+-export([put_process_with_remove_test/1]).
 
 -define(NS, 'default/default').
 
@@ -45,7 +47,9 @@ all() -> [
     repair_after_call_error_test,
     remove_by_timer_test,
     remove_without_timer_test,
-    put_process_test
+    put_process_test,
+    put_process_with_timeout_test,
+    put_process_with_remove_test
 ].
 
 -spec simple_timers_test(_) -> _.
@@ -118,6 +122,7 @@ simple_call_test(_C) ->
             }
         ]
     }} = progressor:get(#{ns => ?NS, id => Id}),
+    unmock_processor(),
     ok.
 %%
 -spec call_replace_timer_test(_) -> _.
@@ -151,6 +156,7 @@ call_replace_timer_test(_C) ->
             }
         ]
     }} = progressor:get(#{ns => ?NS, id => Id}),
+    unmock_processor(),
     ok.
 %%
 -spec call_unset_timer_test(_) -> _.
@@ -176,6 +182,7 @@ call_unset_timer_test(_C) ->
             }
         ]
     }} = progressor:get(#{ns => ?NS, id => Id}),
+    unmock_processor(),
     ok.
 %%
 -spec postponed_call_test(_) -> _.
@@ -215,6 +222,7 @@ postponed_call_test(_C) ->
             }
         ]
     }} = progressor:get(#{ns => ?NS, id => Id}),
+    unmock_processor(),
     ok.
 %%
 -spec postponed_call_to_suspended_process_test(_) -> _.
@@ -247,6 +255,7 @@ postponed_call_to_suspended_process_test(_C) ->
             }
         ]
     }} = progressor:get(#{ns => ?NS, id => Id}),
+    unmock_processor(),
     ok.
 %%
 -spec multiple_calls_test(_) -> _.
@@ -283,6 +292,7 @@ multiple_calls_test(_C) ->
             #{event_id := 10}
         ]
     }} = progressor:get(#{ns => ?NS, id => Id}),
+    unmock_processor(),
     ok.
 
 -spec repair_after_non_retriable_error_test(_) -> _.
@@ -323,6 +333,7 @@ repair_after_non_retriable_error_test(_C) ->
         ]
     } = Process} = progressor:get(#{ns => ?NS, id => Id}),
     false = erlang:is_map_key(detail, Process),
+    unmock_processor(),
     ok.
 %%
 -spec error_after_max_retries_test(_) -> _.
@@ -342,6 +353,7 @@ error_after_max_retries_test(_C) ->
         process_id := Id,
         status := <<"error">>
     }} = progressor:get(#{ns => ?NS, id => Id}),
+    unmock_processor(),
     ok.
 %%
 -spec repair_after_call_error_test(_) -> _.
@@ -388,6 +400,7 @@ repair_after_call_error_test(_C) ->
             }
         ]
     }} = progressor:get(#{ns => ?NS, id => Id}),
+    unmock_processor(),
     ok.
 %%
 -spec remove_by_timer_test(_) -> _.
@@ -418,6 +431,7 @@ remove_by_timer_test(_C) ->
     %% wait tsk_scan_timeout
     timer:sleep(4000),
     {error, <<"process not found">>} = progressor:get(#{ns => ?NS, id => Id}),
+    unmock_processor(),
     ok.
 %%
 -spec remove_without_timer_test(_) -> _.
@@ -442,12 +456,13 @@ remove_without_timer_test(_C) ->
     }} = progressor:get(#{ns => ?NS, id => Id}),
     2 = expect_steps_counter(2),
     {error, <<"process not found">>} = progressor:get(#{ns => ?NS, id => Id}),
+    unmock_processor(),
     ok.
 %%
 -spec put_process_test(_C) -> _.
 put_process_test(_C) ->
     Id = gen_id(),
-    Args = #{
+    Args = #{process => #{
         process_id => Id,
         status => <<"running">>,
         history => [
@@ -455,7 +470,7 @@ put_process_test(_C) ->
             event(2),
             event(3)
         ]
-    },
+    }},
     {ok, ok} = progressor:put(#{ns => ?NS, id => Id, args => Args}),
     {ok,#{
          process_id := Id,
@@ -486,6 +501,60 @@ put_process_test(_C) ->
     }} = progressor:get(#{ns => ?NS, id => Id}),
 
     {error, <<"process already exists">>} = progressor:put(#{ns => ?NS, id => Id, args => Args}),
+    ok.
+%%
+-spec put_process_with_timeout_test(_) -> _.
+put_process_with_timeout_test(_C) ->
+    %% steps:
+    %% 1. put     -> [event1], timer 1s
+    %% 2. timeout -> [event2], undefined
+    _ = mock_processor(put_process_with_timeout_test),
+    Id = gen_id(),
+    Args = #{
+        process => #{
+            process_id => Id,
+            status => <<"running">>,
+            history => [event(1)]
+        },
+        action => #{set_timer => erlang:system_time(second) + 1}
+    },
+    {ok, ok} = progressor:put(#{ns => ?NS, id => Id, args => Args}),
+    {ok, #{
+         process_id := Id,
+        status := <<"running">>,
+        history := [#{event_id := 1}]
+    }} = progressor:get(#{ns => ?NS, id => Id}),
+    1 = expect_steps_counter(1),
+    {ok, #{
+         process_id := Id,
+        status := <<"running">>,
+        history := [#{event_id := 1}, #{event_id := 2}]
+    }} = progressor:get(#{ns => ?NS, id => Id}),
+    unmock_processor(),
+    ok.
+%%
+-spec put_process_with_remove_test(_) -> _.
+put_process_with_remove_test(_C) ->
+    %% steps:
+    %% 1. put     -> [event1], remove 1s
+    %% 2. remove
+    Id = gen_id(),
+    Args = #{
+        process => #{
+            process_id => Id,
+            status => <<"running">>,
+            history => [event(1)]
+        },
+        action => #{set_timer => erlang:system_time(second) + 1, remove => true}
+    },
+    {ok, ok} = progressor:put(#{ns => ?NS, id => Id, args => Args}),
+    {ok, #{
+         process_id := Id,
+        status := <<"running">>,
+        history := [#{event_id := 1}]
+    }} = progressor:get(#{ns => ?NS, id => Id}),
+    timer:sleep(3000),
+    {error, <<"process not found">>} = progressor:get(#{ns => ?NS, id => Id}),
     ok.
 
 %%%%%%%%%%%%%%%%%%%%%
@@ -800,6 +869,16 @@ mock_processor(remove_without_timer_test = TestCase) ->
                 action => #{remove => true}
             },
             Self ! 2,
+            {ok, Result}
+    end,
+    mock_processor(TestCase, MockProcessor);
+%%
+mock_processor(put_process_with_timeout_test = TestCase) ->
+    Self = self(),
+    MockProcessor = fun
+        ({timeout, <<>>, _Process}, _Opts, _Ctx) ->
+            Result = #{events => [event(2)]},
+            Self ! 1,
             {ok, Result}
     end,
     mock_processor(TestCase, MockProcessor).

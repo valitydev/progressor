@@ -49,7 +49,8 @@ get_task_result(#{client := Handler, options := HandlerOpts}, NsId, KeyOrId) ->
 get_process_status(#{client := Handler, options := HandlerOpts}, NsId, Id) ->
     Handler:get_process_status(HandlerOpts, NsId, Id).
 
--spec put_process_data(storage_opts(), namespace_id(), id(), #{process := process(), task => task()}) ->
+-spec put_process_data(storage_opts(), namespace_id(), id(),
+    #{process := process(), init_task => task(), active_task => task()}) ->
     {ok, _Result} | {error, _Reason}.
 put_process_data(#{client := Handler, options := HandlerOpts}, NsId, Id, ProcessData) ->
     Handler:put_process_data(HandlerOpts, NsId, Id, ProcessData).

@@ -107,19 +107,23 @@ get_process(Recipient, PgOpts, NsId, ProcessId, HistoryRange) ->
             {ok, Proc#{history => Events}}
     end.
 
--spec put_process_data(pg_opts(), namespace_id(), id(), #{process := process(), task => task()}) ->
+-spec put_process_data(pg_opts(), namespace_id(), id(),
+    #{process := process(), init_task := task(), active_task => task() | undefined}
+) ->
     {ok, _Result} | {error, _Reason}.
 put_process_data(PgOpts, NsId, ProcessId, ProcessData) ->
     #{
         process := #{
             history := Events
         } = Process,
-        task := Task
+        init_task := InitTask
     } = ProcessData,
+    ActiveTask = maps:get(active_task, ProcessData, undefined),
     Pool = get_pool(external, PgOpts),
     #{
         processes := ProcessesTable,
         tasks := TaskTable,
+        schedule := ScheduleTable,
         events := EventsTable
     } = tables(NsId),
     epg_pool:transaction(
@@ -127,10 +131,11 @@ put_process_data(PgOpts, NsId, ProcessId, ProcessData) ->
         fun(Connection) ->
             case do_save_process(Connection, ProcessesTable, Process) of
                 {ok, _} ->
-                    {ok, _, _, [{TaskId}]} = do_save_task(Connection, TaskTable, Task),
+                    {ok, _, _, [{InitTaskId}]} = do_save_task(Connection, TaskTable, InitTask),
                     lists:foreach(fun(Ev) ->
-                        {ok, _} = do_save_event(Connection, EventsTable, ProcessId, TaskId, Ev)
+                        {ok, _} = do_save_event(Connection, EventsTable, ProcessId, InitTaskId, Ev)
                     end, Events),
+                    ok = maybe_schedule_task(Connection, TaskTable, ScheduleTable, ActiveTask),
                     {ok, ok};
                 {error, #error{codename = unique_violation}} ->
                     {error, <<"process already exists">>}
@@ -742,6 +747,13 @@ do_save_process(Connection, Table, Process) ->
         "INSERT INTO " ++ Table ++ " (process_id, status, detail, aux_state, metadata) VALUES ($1, $2, $3, $4, $5)",
         [ProcessId, Status, Detail, AuxState, json_encode(Meta)]
     ).
+
+maybe_schedule_task(_Connection, _TaskTable, _ScheduleTable, undefined) ->
+    ok;
+maybe_schedule_task(Connection, TaskTable, ScheduleTable, Task) ->
+    {ok, _, _, [{TaskId}]} = do_save_task(Connection, TaskTable, Task),
+    {ok, _, _, _} = do_save_schedule(Connection, ScheduleTable, Task#{task_id => TaskId}),
+    ok.
 
 do_save_task(Connection, Table, Task) ->
     do_save_task(Connection, Table, Task, " task_id ").
