@@ -187,13 +187,14 @@ do_get(#{ns_opts := #{storage := StorageOpts}, id := Id, ns := NsId, args := His
 do_get(#{ns_opts := #{storage := StorageOpts}, id := Id, ns := NsId}) ->
     prg_storage:get_process(external, StorageOpts, NsId, Id, #{}).
 
-do_put(#{ns_opts := #{storage := StorageOpts}, id := Id, ns := NsId, args := Process}= Opts) ->
+do_put(#{ns_opts := #{storage := StorageOpts}, id := Id, ns := NsId, args := #{process := Process} = Args}= Opts) ->
     #{
         process_id := ProcessId
     } = Process,
+    Action = maps:get(action, Args, undefined),
     Context = maps:get(context, Opts, <<>>),
     Now = erlang:system_time(second),
-    Task = #{
+    InitTask = #{
         process_id => ProcessId,
         task_type => <<"init">>,
         status => <<"finished">>,
@@ -206,8 +207,10 @@ do_put(#{ns_opts := #{storage := StorageOpts}, id := Id, ns := NsId, args := Pro
         last_retry_interval => 0,
         attempts_count => 0
     },
-    prg_storage:put_process_data(StorageOpts, NsId, Id, #{process => Process, task => Task}).
-
+    ActiveTask = action_to_task(Action, ProcessId, Context),
+    ProcessData0 = #{process => Process, init_task => InitTask},
+    ProcessData = maybe_add_key(ActiveTask, active_task, ProcessData0),
+    prg_storage:put_process_data(StorageOpts, NsId, Id, ProcessData).
 
 process_call(#{ns_opts := NsOpts, ns := NsId, type := Type, task := Task, worker := Worker}) ->
     TimeoutSec = maps:get(process_step_timeout, NsOpts, ?DEFAULT_STEP_TIMEOUT_SEC),
@@ -288,3 +291,29 @@ check_for_run(undefined) ->
     <<"waiting">>;
 check_for_run(Pid) when is_pid(Pid) ->
     <<"running">>.
+%%
+
+action_to_task(undefined, _ProcessId, _Ctx) ->
+    undefined;
+action_to_task(unset_timer, _ProcessId, _Ctx) ->
+    undefined;
+action_to_task(#{set_timer := Timestamp} = Action, ProcessId, Context) ->
+    TaskType = case maps:get(remove, Action, false) of
+        true -> <<"remove">>;
+        false -> <<"timeout">>
+    end,
+    #{
+        process_id => ProcessId,
+        task_type => TaskType,
+        status => <<"waiting">>,
+        args => <<>>,
+        context => Context,
+        scheduled_time => Timestamp,
+        last_retry_interval => 0,
+        attempts_count => 0
+    }.
+
+maybe_add_key(undefined, _Key, Map) ->
+    Map;
+maybe_add_key(Value, Key, Map) ->
+    Map#{Key => Value}.
