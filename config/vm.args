@@ -2,5 +2,9 @@
 
 -setcookie progressor_cookie
 
-+K true
-+A30
++sbwt none
++sbwtdcpu none
++sbwtdio none
++swt very_low
++swtdcpu very_low
++swtdio very_low
