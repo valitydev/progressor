@@ -1,5 +1,4 @@
 services:
-
   testrunner:
     image: $DEV_IMAGE_TAG
     environment:
@@ -26,6 +25,7 @@ services:
 
   postgres:
     image: postgres:15-bookworm
+    command: -c 'max_connections=300'
     environment:
       POSTGRES_DB: "progressor_db"
       POSTGRES_USER: "progressor"

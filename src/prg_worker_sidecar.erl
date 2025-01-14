@@ -43,7 +43,9 @@
     {ok, _Result} | {error, _Reason} | no_return().
 process(Pid, Deadline, #{namespace := NS} = NsOpts, {TaskType, _, _} = Request, Context) ->
     Timeout = Deadline - erlang:system_time(millisecond),
-    Fun = fun() -> gen_server:call(Pid, {process, NsOpts, Request, Context}, Timeout) end,
+    Fun = fun() ->
+        gen_server:call(Pid, {process, NsOpts, Request, Context}, Timeout)
+    end,
     prg_utils:with_observe(Fun, ?PROCESSING_KEY, [NS, erlang:atom_to_list(TaskType)]).
 
 %% storage wrappers
@@ -122,7 +124,9 @@ complete_and_error(Pid, _Deadline, StorageOpts, NsId, TaskResult, Process) ->
     ok | no_return().
 remove_process(Pid, _Deadline, StorageOpts, NsId, ProcessId) ->
     %% Timeout = Deadline - erlang:system_time(millisecond),
-    Fun = fun() -> gen_server:call(Pid, {remove_process, StorageOpts, NsId, ProcessId}, infinity) end,
+    Fun = fun() ->
+        gen_server:call(Pid, {remove_process, StorageOpts, NsId, ProcessId}, infinity)
+    end,
     prg_utils:with_observe(Fun, ?REMOVING_KEY, [erlang:atom_to_list(NsId)]).
 
 %% notifier wrappers
@@ -130,14 +134,18 @@ remove_process(Pid, _Deadline, StorageOpts, NsId, ProcessId) ->
 -spec event_sink(pid(), timestamp_ms(), namespace_opts(), id(), [event()]) -> ok | no_return().
 event_sink(Pid, Deadline, #{namespace := Ns} = NsOpts, ProcessId, Events) ->
     Timeout = Deadline - erlang:system_time(millisecond),
-    Fun = fun() -> gen_server:call(Pid, {event_sink, NsOpts, ProcessId, Events}, Timeout) end,
+    Fun = fun() ->
+        gen_server:call(Pid, {event_sink, NsOpts, ProcessId, Events}, Timeout)
+    end,
     prg_utils:with_observe(Fun, ?NOTIFICATION_KEY, [Ns, "event_sink"]).
 
 -spec lifecycle_sink(pid(), timestamp_ms(), namespace_opts(), task_t() | {error, _Reason}, id()) ->
     ok | no_return().
 lifecycle_sink(Pid, Deadline, #{namespace := Ns} = NsOpts, TaskType, ProcessId) ->
     Timeout = Deadline - erlang:system_time(millisecond),
-    Fun = fun() -> gen_server:call(Pid, {lifecycle_sink, NsOpts, TaskType, ProcessId}, Timeout) end,
+    Fun = fun() ->
+        gen_server:call(Pid, {lifecycle_sink, NsOpts, TaskType, ProcessId}, Timeout)
+    end,
     prg_utils:with_observe(Fun, ?NOTIFICATION_KEY, [Ns, "lifecycle_sink"]).
 %%
 
