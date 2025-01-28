@@ -25,10 +25,12 @@ start_link({NsId, _} = NS) ->
 
 init({NsId, NsOpts}) ->
     MaxRestarts = 1000,
-    MaxSecondsBetweenRestarts = 3600,
-    SupFlags = #{strategy => simple_one_for_one,
+    MaxSecondsBetweenRestarts = 5,
+    SupFlags = #{
+        strategy => simple_one_for_one,
         intensity => MaxRestarts,
-        period => MaxSecondsBetweenRestarts},
+        period => MaxSecondsBetweenRestarts
+    },
     ChildSpecs = [
         #{
             id => prg_utils:registered_name(NsId, "_prg_worker"),
