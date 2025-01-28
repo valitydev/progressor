@@ -82,14 +82,16 @@ handle_cast(
     {noreply, NewState};
 handle_cast(
     next_task,
-    State = #prg_worker_state{
+    _State = #prg_worker_state{
         ns_id = _NsId,
         ns_opts = #{storage := _StorageOpts, process_step_timeout := _TimeoutSec},
-        sidecar_pid = _CurrentPid
+        sidecar_pid = CurrentPid
     }
 ) ->
-    exit(normal),
-    {noreply, State}.
+    %% kill sidecar and restart to clear memory
+    true = erlang:unlink(CurrentPid),
+    true = erlang:exit(CurrentPid, kill),
+    exit(normal).
     %% restart sidecar to clear memory
 %    true = erlang:unlink(CurrentPid),
 %    true = erlang:exit(CurrentPid, kill),
