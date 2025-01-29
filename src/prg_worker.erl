@@ -4,7 +4,7 @@
 
 -include("progressor.hrl").
 
--export([start_link/3]).
+-export([start_link/2]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2,
     code_change/3]).
 -export([handle_continue/2]).
@@ -13,7 +13,7 @@
 -export([continuation_task/3]).
 -export([next_task/1]).
 
--record(prg_worker_state, {ns_id, ns_opts, num, process, sidecar_pid}).
+-record(prg_worker_state, {ns_id, ns_opts, process, sidecar_pid}).
 
 %%%
 %%% API
@@ -35,14 +35,13 @@ next_task(Worker) ->
 %%% Spawning and gen_server implementation
 %%%===================================================================
 
-start_link(NsId, NsOpts, Num) ->
-    gen_server:start_link(?MODULE, [NsId, NsOpts, Num], []).
+start_link(NsId, NsOpts) ->
+    gen_server:start_link(?MODULE, [NsId, NsOpts], []).
 
-init([NsId, NsOpts, Num]) ->
+init([NsId, NsOpts]) ->
     {ok, #prg_worker_state{
         ns_id = NsId,
-        ns_opts = NsOpts,
-        num = Num
+        ns_opts = NsOpts
     }, {continue, do_start}}.
 
 handle_continue(do_start, State = #prg_worker_state{ns_id = NsId}) ->

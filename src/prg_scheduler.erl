@@ -17,7 +17,7 @@
 -export([release_worker/3]).
 -export([continuation_task/3]).
 
--record(prg_scheduler_state, {ns_id, ns_opts, ready, free_workers, owners}).
+-record(prg_scheduler_state, {ns_id, ns_opts, ready, free_workers, owners, wrk_monitors}).
 
 %%%%%%%
 %%% API
@@ -67,13 +67,14 @@ start_link({NsId, _NsOpts} = NS) ->
     gen_server:start_link({local, RegName}, ?MODULE, NS, []).
 
 init({NsId, Opts}) ->
-    _ = start_workers(NsId, Opts),
+    Monitors = start_workers(NsId, Opts),
     State = #prg_scheduler_state{
         ns_id = NsId,
         ns_opts = Opts,
         ready = queue:new(),
         free_workers = queue:new(),
-        owners = #{}
+        owners = #{},
+        wrk_monitors = Monitors
     },
     {ok, State}.
 
@@ -152,6 +153,15 @@ handle_info(
     State = #prg_scheduler_state{owners = Owners}
 ) when erlang:is_map_key(Pid, Owners) ->
     {noreply, State#prg_scheduler_state{owners = maps:without([Pid], Owners)}};
+handle_info(
+    {'DOWN', _Ref, process, Pid, _Info},
+    State = #prg_scheduler_state{wrk_monitors = WrkMonitors, ns_id = NsId}
+) when erlang:is_map_key(Pid, WrkMonitors) ->
+    WorkerSup = prg_utils:registered_name(NsId, "_worker_sup"),
+    {ok, NewWrk} = supervisor:start_child(WorkerSup, []),
+    MRef = erlang:monitor(process, NewWrk),
+    NewWrkMonitors = maps:put(NewWrk, MRef, maps:without([Pid], WrkMonitors)),
+    {noreply, State#prg_scheduler_state{wrk_monitors = NewWrkMonitors}};
 handle_info(_Info, State = #prg_scheduler_state{}) ->
     {noreply, State}.
 
@@ -168,9 +178,11 @@ code_change(_OldVsn, State = #prg_scheduler_state{}, _Extra) ->
 start_workers(NsId, NsOpts) ->
     WorkerPoolSize = maps:get(worker_pool_size, NsOpts, ?DEFAULT_WORKER_POOL_SIZE),
     WorkerSup = prg_utils:registered_name(NsId, "_worker_sup"),
-    lists:foreach(fun(N) ->
-        supervisor:start_child(WorkerSup, [N])
-    end, lists:seq(1, WorkerPoolSize)).
+    lists:foldl(fun(_N, Acc) ->
+        {ok, Pid} = supervisor:start_child(WorkerSup, []),
+        MRef = erlang:monitor(process, Pid),
+        Acc#{Pid => MRef}
+    end, #{}, lists:seq(1, WorkerPoolSize)).
 
 do_push_task(TaskHeader, Task, State) ->
     FreeWorkers = State#prg_scheduler_state.free_workers,
