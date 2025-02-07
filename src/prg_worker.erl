@@ -4,7 +4,7 @@
 
 -include("progressor.hrl").
 
--export([start_link/3]).
+-export([start_link/2]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2,
     code_change/3]).
 -export([handle_continue/2]).
@@ -13,7 +13,7 @@
 -export([continuation_task/3]).
 -export([next_task/1]).
 
--record(prg_worker_state, {ns_id, ns_opts, num, process, sidecar_pid}).
+-record(prg_worker_state, {ns_id, ns_opts, process, sidecar_pid}).
 
 %%%
 %%% API
@@ -35,14 +35,13 @@ next_task(Worker) ->
 %%% Spawning and gen_server implementation
 %%%===================================================================
 
-start_link(NsId, NsOpts, Num) ->
-    gen_server:start_link(?MODULE, [NsId, NsOpts, Num], []).
+start_link(NsId, NsOpts) ->
+    gen_server:start_link(?MODULE, [NsId, NsOpts], []).
 
-init([NsId, NsOpts, Num]) ->
+init([NsId, NsOpts]) ->
     {ok, #prg_worker_state{
         ns_id = NsId,
-        ns_opts = NsOpts,
-        num = Num
+        ns_opts = NsOpts
     }, {continue, do_start}}.
 
 handle_continue(do_start, State = #prg_worker_state{ns_id = NsId}) ->
@@ -74,35 +73,17 @@ handle_cast(
 handle_cast(
     {continuation_task, TaskHeader, Task},
     State = #prg_worker_state{
-            ns_opts = #{process_step_timeout := TimeoutSec}
+        ns_opts = #{process_step_timeout := TimeoutSec}
     }
 ) ->
     Deadline = erlang:system_time(millisecond) + TimeoutSec * 1000,
     NewState = do_process_task(TaskHeader, Task, Deadline, State),
     {noreply, NewState};
-handle_cast(
-    next_task,
-    State = #prg_worker_state{
-        ns_id = NsId,
-        ns_opts = #{storage := StorageOpts, process_step_timeout := TimeoutSec},
-        sidecar_pid = CurrentPid
-    }
-) ->
-    %% restart sidecar to clear memory
+handle_cast(next_task, #prg_worker_state{sidecar_pid = CurrentPid}) ->
+    %% kill sidecar and restart to clear memory
     true = erlang:unlink(CurrentPid),
     true = erlang:exit(CurrentPid, kill),
-    {ok, Pid} = prg_worker_sidecar:start_link(),
-    NewState =
-        case prg_scheduler:pop_task(NsId, self()) of
-            {TaskHeader, Task} ->
-                Deadline = erlang:system_time(millisecond) + TimeoutSec * 1000,
-                ProcessId = maps:get(process_id, Task),
-                {ok, Process} = prg_worker_sidecar:get_process(Pid, Deadline, StorageOpts, NsId, ProcessId),
-                do_process_task(TaskHeader, Task, Deadline, State#prg_worker_state{process = Process, sidecar_pid = Pid});
-            not_found ->
-                State#prg_worker_state{sidecar_pid = Pid}
-        end,
-    {noreply, NewState}.
+    exit(normal).
 
 handle_info(_Info, State = #prg_worker_state{}) ->
     {noreply, State}.

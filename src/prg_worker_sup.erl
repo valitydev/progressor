@@ -8,8 +8,6 @@
 %% Supervisor callbacks
 -export([init/1]).
 
--define(SERVER, ?MODULE).
-
 %%%===================================================================
 %%% API functions
 %%%===================================================================
@@ -24,15 +22,18 @@ start_link({NsId, _} = NS) ->
 %%%===================================================================
 
 init({NsId, NsOpts}) ->
-    MaxRestarts = 1000,
-    MaxSecondsBetweenRestarts = 3600,
-    SupFlags = #{strategy => simple_one_for_one,
-        intensity => MaxRestarts,
-        period => MaxSecondsBetweenRestarts},
+    %MaxRestarts = 1000,
+    %MaxSecondsBetweenRestarts = 3600,
+    SupFlags = #{
+        strategy => simple_one_for_one
+        %intensity => MaxRestarts,
+        %period => MaxSecondsBetweenRestarts
+    },
     ChildSpecs = [
         #{
             id => prg_utils:registered_name(NsId, "_prg_worker"),
-            start => {prg_worker, start_link, [NsId, NsOpts]}
+            start => {prg_worker, start_link, [NsId, NsOpts]},
+            restart => temporary
         }
     ],
 
