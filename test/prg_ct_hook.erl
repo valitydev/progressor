@@ -21,7 +21,7 @@ terminate(_State) -> ok.
 
 start_applications() ->
     lists:foreach(fun(App) ->
-        application:load(App),
+        _ = application:load(App),
         lists:foreach(fun({K, V}) -> ok = application:set_env(App, K, V) end, app_env(App)),
         {ok, _} = application:ensure_all_started(App)
     end, app_list()).

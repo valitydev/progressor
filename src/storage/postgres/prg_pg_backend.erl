@@ -506,7 +506,7 @@ complete_and_unlock(PgOpts, NsId, TaskResult, Process, Events) ->
                 RunningTable,
                 TaskResult#{process_id => ProcessId}
             ),
-            case Completion of
+            _ = case Completion of
                 {ok, _, _, []} ->
                     {ok, _} = do_unlock_timer(Connection, ScheduleTable, ProcessId);
                 {ok, _, _Col, _Row} ->
@@ -535,7 +535,7 @@ db_init(#{pool := Pool}, NsId) ->
                 Connection,
                 "select exists (select 1 from pg_type where typname = 'process_status')"
             ),
-            case IsProcessStatusExists of
+            _ = case IsProcessStatusExists of
                 true ->
                     ok;
                 false ->
@@ -549,7 +549,7 @@ db_init(#{pool := Pool}, NsId) ->
                 Connection,
                 "select exists (select 1 from pg_type where typname = 'task_status')"
             ),
-            case IsTaskStatusExists of
+            _ = case IsTaskStatusExists of
                 true ->
                     ok;
                 false ->
@@ -564,7 +564,7 @@ db_init(#{pool := Pool}, NsId) ->
                 Connection,
                 "select exists (select 1 from pg_type where typname = 'task_type')"
             ),
-            case IsTaskTypeExists of
+            _ = case IsTaskTypeExists of
                 true ->
                     ok;
                 false ->

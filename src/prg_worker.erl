@@ -380,7 +380,7 @@ handle_result(
         finished_time => erlang:system_time(second),
         status => <<"error">>
     },
-    case check_retryable(TaskHeader, Task, RetryPolicy, Reason) of
+    _ = case check_retryable(TaskHeader, Task, RetryPolicy, Reason) of
         not_retryable ->
             Detail = prg_utils:format(Reason),
             ProcessUpdated = Process#{status => <<"error">>, detail => Detail, corrupted_by => TaskId},

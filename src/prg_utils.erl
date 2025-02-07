@@ -50,7 +50,7 @@ with_observe(Fun, MetricType, MetricKey, Labels) ->
     {DurationMicro, Result} = timer:tc(Fun),
     DurationMs = DurationMicro div 1000,
     logger:debug("metric: ~p, labels: ~p, value: ~p", [MetricKey, Labels, DurationMs]),
-    collect(MetricType, MetricKey, Labels, DurationMs),
+    ok = collect(MetricType, MetricKey, Labels, DurationMs),
     Result.
 
 collect(histogram, MetricKey, Labels, Value) ->

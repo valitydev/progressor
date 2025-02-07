@@ -92,9 +92,6 @@ check-format:
 dialyze:
 	$(REBAR) as test dialyzer
 
-release:
-	$(REBAR) as prod release
-
 eunit:
 	$(REBAR) eunit --cover
 
