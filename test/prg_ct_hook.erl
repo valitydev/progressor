@@ -20,11 +20,14 @@ terminate(_State) -> ok.
 %% Internal functions
 
 start_applications() ->
-    lists:foreach(fun(App) ->
-        application:load(App),
-        lists:foreach(fun({K, V}) -> ok = application:set_env(App, K, V) end, app_env(App)),
-        {ok, _} = application:ensure_all_started(App)
-    end, app_list()).
+    lists:foreach(
+        fun(App) ->
+            _ = application:load(App),
+            lists:foreach(fun({K, V}) -> ok = application:set_env(App, K, V) end, app_env(App)),
+            {ok, _} = application:ensure_all_started(App)
+        end,
+        app_list()
+    ).
 
 app_list() ->
     %% in order of launch
@@ -44,9 +47,11 @@ app_env(progressor) ->
                 }
             },
             retry_policy => #{
-                initial_timeout => 1, %% seconds
+                %% seconds
+                initial_timeout => 1,
                 backoff_coefficient => 1.0,
-                max_timeout => 180, %% seconds
+                %% seconds
+                max_timeout => 180,
                 max_attempts => 3,
                 non_retryable_errors => [
                     do_not_retry,
@@ -56,9 +61,11 @@ app_env(progressor) ->
                     {temporary, unavilable}
                 ]
             },
-            task_scan_timeout => 1, %% seconds
+            %% seconds
+            task_scan_timeout => 1,
             worker_pool_size => 10,
-            process_step_timeout => 10 %% seconds
+            %% seconds
+            process_step_timeout => 10
         }},
 
         {namespaces, #{

@@ -34,23 +34,24 @@ init_per_suite(Config) ->
 end_per_suite(_Config) ->
     ok.
 
-all() -> [
-    simple_timers_test,
-    simple_call_test,
-    call_replace_timer_test,
-    call_unset_timer_test,
-    postponed_call_test,
-    postponed_call_to_suspended_process_test,
-    multiple_calls_test,
-    repair_after_non_retriable_error_test,
-    error_after_max_retries_test,
-    repair_after_call_error_test,
-    remove_by_timer_test,
-    remove_without_timer_test,
-    put_process_test,
-    put_process_with_timeout_test,
-    put_process_with_remove_test
-].
+all() ->
+    [
+        simple_timers_test,
+        simple_call_test,
+        call_replace_timer_test,
+        call_unset_timer_test,
+        postponed_call_test,
+        postponed_call_to_suspended_process_test,
+        multiple_calls_test,
+        repair_after_non_retriable_error_test,
+        error_after_max_retries_test,
+        repair_after_call_error_test,
+        remove_by_timer_test,
+        remove_without_timer_test,
+        put_process_test,
+        put_process_with_timeout_test,
+        put_process_with_remove_test
+    ].
 
 -spec simple_timers_test(_) -> _.
 simple_timers_test(_C) ->
@@ -314,24 +315,25 @@ repair_after_non_retriable_error_test(_C) ->
     }} = progressor:get(#{ns => ?NS, id => Id}),
     {ok, ok} = progressor:repair(#{ns => ?NS, id => Id, args => <<"repair_args">>}),
     4 = expect_steps_counter(4),
-    {ok, #{
-        process_id := Id,
-        status := <<"running">>,
-        history := [
-            #{
-                event_id := 1,
-                metadata := #{<<"format_version">> := 1},
-                payload := _Pl1,
-                timestamp := _Ts1
-            },
-            #{
-                event_id := 2,
-                metadata := #{<<"format_version">> := 1},
-                payload := _Pl2,
-                timestamp := _Ts2
-            }
-        ]
-    } = Process} = progressor:get(#{ns => ?NS, id => Id}),
+    {ok,
+        #{
+            process_id := Id,
+            status := <<"running">>,
+            history := [
+                #{
+                    event_id := 1,
+                    metadata := #{<<"format_version">> := 1},
+                    payload := _Pl1,
+                    timestamp := _Ts1
+                },
+                #{
+                    event_id := 2,
+                    metadata := #{<<"format_version">> := 1},
+                    payload := _Pl2,
+                    timestamp := _Ts2
+                }
+            ]
+        } = Process} = progressor:get(#{ns => ?NS, id => Id}),
     false = erlang:is_map_key(detail, Process),
     unmock_processor(),
     ok.
@@ -375,7 +377,9 @@ repair_after_call_error_test(_C) ->
         process_id := Id,
         status := <<"error">>
     }} = progressor:get(#{ns => ?NS, id => Id}),
-    {error, <<"repair_error">>} = progressor:repair(#{ns => ?NS, id => Id, args => <<"bad_repair_args">>}),
+    {error, <<"repair_error">>} = progressor:repair(#{
+        ns => ?NS, id => Id, args => <<"bad_repair_args">>
+    }),
     3 = expect_steps_counter(3),
     %% shoul not rewrite detail
     {ok, #{
@@ -462,18 +466,20 @@ remove_without_timer_test(_C) ->
 -spec put_process_test(_C) -> _.
 put_process_test(_C) ->
     Id = gen_id(),
-    Args = #{process => #{
-        process_id => Id,
-        status => <<"running">>,
-        history => [
-            event(1),
-            event(2),
-            event(3)
-        ]
-    }},
+    Args = #{
+        process => #{
+            process_id => Id,
+            status => <<"running">>,
+            history => [
+                event(1),
+                event(2),
+                event(3)
+            ]
+        }
+    },
     {ok, ok} = progressor:put(#{ns => ?NS, id => Id, args => Args}),
-    {ok,#{
-         process_id := Id,
+    {ok, #{
+        process_id := Id,
         status := <<"running">>,
         history := [
             #{
@@ -520,13 +526,13 @@ put_process_with_timeout_test(_C) ->
     },
     {ok, ok} = progressor:put(#{ns => ?NS, id => Id, args => Args}),
     {ok, #{
-         process_id := Id,
+        process_id := Id,
         status := <<"running">>,
         history := [#{event_id := 1}]
     }} = progressor:get(#{ns => ?NS, id => Id}),
     1 = expect_steps_counter(1),
     {ok, #{
-         process_id := Id,
+        process_id := Id,
         status := <<"running">>,
         history := [#{event_id := 1}, #{event_id := 2}]
     }} = progressor:get(#{ns => ?NS, id => Id}),
@@ -549,7 +555,7 @@ put_process_with_remove_test(_C) ->
     },
     {ok, ok} = progressor:put(#{ns => ?NS, id => Id, args => Args}),
     {ok, #{
-         process_id := Id,
+        process_id := Id,
         status := <<"running">>,
         history := [#{event_id := 1}]
     }} = progressor:get(#{ns => ?NS, id => Id}),
@@ -843,13 +849,12 @@ mock_processor(repair_after_call_error_test = TestCase) ->
     mock_processor(TestCase, MockProcessor);
 %%
 mock_processor(remove_by_timer_test = TestCase) ->
-    MockProcessor = fun
-        ({init, <<"init_args">>, _Process}, _Opts, _Ctx) ->
-            Result = #{
-                events => [event(1), event(2)],
-                action => #{set_timer => erlang:system_time(second) + 2, remove => true}
-            },
-            {ok, Result}
+    MockProcessor = fun({init, <<"init_args">>, _Process}, _Opts, _Ctx) ->
+        Result = #{
+            events => [event(1), event(2)],
+            action => #{set_timer => erlang:system_time(second) + 2, remove => true}
+        },
+        {ok, Result}
     end,
     mock_processor(TestCase, MockProcessor);
 %%
@@ -875,11 +880,10 @@ mock_processor(remove_without_timer_test = TestCase) ->
 %%
 mock_processor(put_process_with_timeout_test = TestCase) ->
     Self = self(),
-    MockProcessor = fun
-        ({timeout, <<>>, _Process}, _Opts, _Ctx) ->
-            Result = #{events => [event(2)]},
-            Self ! 1,
-            {ok, Result}
+    MockProcessor = fun({timeout, <<>>, _Process}, _Opts, _Ctx) ->
+        Result = #{events => [event(2)]},
+        Self ! 1,
+        {ok, Result}
     end,
     mock_processor(TestCase, MockProcessor).
 
@@ -917,7 +921,8 @@ event(Id) ->
         event_id => Id,
         timestamp => erlang:system_time(second),
         metadata => #{<<"format_version">> => 1},
-        payload => erlang:term_to_binary({bin, crypto:strong_rand_bytes(8)}) %% msg_pack compatibility for kafka
+        %% msg_pack compatibility for kafka
+        payload => erlang:term_to_binary({bin, crypto:strong_rand_bytes(8)})
     }.
 
 gen_id() ->

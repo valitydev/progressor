@@ -37,58 +37,76 @@ reply(Pid, Msg) ->
 %% API
 -spec init(request()) -> {ok, _Result} | {error, _Reason}.
 init(Req) ->
-    prg_utils:pipe([
-        fun add_ns_opts/1,
-        fun check_idempotency/1,
-        fun add_task/1,
-        fun(Data) -> prepare(fun prg_storage:prepare_init/4, Data) end,
-        fun process_call/1
-    ], Req#{type => init}).
+    prg_utils:pipe(
+        [
+            fun add_ns_opts/1,
+            fun check_idempotency/1,
+            fun add_task/1,
+            fun(Data) -> prepare(fun prg_storage:prepare_init/4, Data) end,
+            fun process_call/1
+        ],
+        Req#{type => init}
+    ).
 
 -spec call(request()) -> {ok, _Result} | {error, _Reason}.
 call(Req) ->
-    prg_utils:pipe([
-        fun add_ns_opts/1,
-        fun check_idempotency/1,
-        fun(Data) -> check_process_status(Data, <<"running">>) end,
-        fun add_task/1,
-        fun(Data) -> prepare(fun prg_storage:prepare_call/4, Data) end,
-        fun process_call/1
-    ], Req#{type => call}).
+    prg_utils:pipe(
+        [
+            fun add_ns_opts/1,
+            fun check_idempotency/1,
+            fun(Data) -> check_process_status(Data, <<"running">>) end,
+            fun add_task/1,
+            fun(Data) -> prepare(fun prg_storage:prepare_call/4, Data) end,
+            fun process_call/1
+        ],
+        Req#{type => call}
+    ).
 
 -spec repair(request()) -> {ok, _Result} | {error, _Reason}.
 repair(Req) ->
-    prg_utils:pipe([
-        fun add_ns_opts/1,
-        fun check_idempotency/1,
-        fun(Data) -> check_process_status(Data, <<"error">>) end,
-        fun add_task/1,
-        fun(Data) -> prepare(fun prg_storage:prepare_repair/4, Data) end,
-        fun process_call/1
-    ], Req#{type => repair}).
+    prg_utils:pipe(
+        [
+            fun add_ns_opts/1,
+            fun check_idempotency/1,
+            fun(Data) -> check_process_status(Data, <<"error">>) end,
+            fun add_task/1,
+            fun(Data) -> prepare(fun prg_storage:prepare_repair/4, Data) end,
+            fun process_call/1
+        ],
+        Req#{type => repair}
+    ).
 
 -spec get(request()) -> {ok, _Result} | {error, _Reason}.
 get(Req) ->
-    prg_utils:pipe([
-        fun add_ns_opts/1,
-        fun do_get/1
-    ], Req).
+    prg_utils:pipe(
+        [
+            fun add_ns_opts/1,
+            fun do_get/1
+        ],
+        Req
+    ).
 
 -spec put(request()) -> {ok, _Result} | {error, _Reason}.
 put(Req) ->
-    prg_utils:pipe([
-        fun add_ns_opts/1,
-        fun do_put/1
-    ], Req).
+    prg_utils:pipe(
+        [
+            fun add_ns_opts/1,
+            fun do_put/1
+        ],
+        Req
+    ).
 
 %-ifdef(TEST).
 
 -spec cleanup(_) -> _.
 cleanup(Opts) ->
-    prg_utils:pipe([
-        fun add_ns_opts/1,
-        fun cleanup_storage/1
-    ], Opts).
+    prg_utils:pipe(
+        [
+            fun add_ns_opts/1,
+            fun cleanup_storage/1
+        ],
+        Opts
+    ).
 
 cleanup_storage(#{ns := NsId, ns_opts := #{storage := StorageOpts}}) ->
     ok = prg_storage:cleanup(StorageOpts, NsId).
@@ -126,14 +144,20 @@ add_task(#{id := Id, type := Type} = Opts) ->
     Task = make_task(maybe_add_idempotency(TaskData, maps:get(idempotency_key, Opts, undefined))),
     Opts#{task => Task}.
 
-check_process_status(#{ns_opts := #{storage := StorageOpts}, id := Id, ns := NsId} = Opts, ExpectedStatus) ->
+check_process_status(
+    #{ns_opts := #{storage := StorageOpts}, id := Id, ns := NsId} = Opts, ExpectedStatus
+) ->
     case prg_storage:get_process_status(StorageOpts, NsId, Id) of
         {ok, ExpectedStatus} -> Opts;
         {ok, OtherStatus} -> {error, <<"process is ", OtherStatus/binary>>};
         {error, _} = Error -> Error
     end.
 
-prepare(Fun, #{ns_opts := #{storage := StorageOpts} = NsOpts, ns := NsId, id := ProcessId, task := Task} = Req) ->
+prepare(
+    Fun,
+    #{ns_opts := #{storage := StorageOpts} = NsOpts, ns := NsId, id := ProcessId, task := Task} =
+        Req
+) ->
     Worker = capture_worker(NsId),
     TaskStatus = check_for_run(Worker),
     TaskType = maps:get(task_type, Task),
@@ -159,7 +183,9 @@ prepare(Fun, #{ns_opts := #{storage := StorageOpts} = NsOpts, ns := NsId, id := 
             Error
     end.
 
-get_task_result(#{ns_opts := #{storage := StorageOpts} = NsOpts, ns := NsId, idempotency_key := IdempotencyKey}) ->
+get_task_result(#{
+    ns_opts := #{storage := StorageOpts} = NsOpts, ns := NsId, idempotency_key := IdempotencyKey
+}) ->
     case prg_storage:get_task_result(StorageOpts, NsId, {idempotency_key, IdempotencyKey}) of
         {ok, Result} ->
             Result;
@@ -179,7 +205,9 @@ await_task_result(StorageOpts, NsId, KeyOrId, Timeout, Duration) ->
             Result;
         {error, _} ->
             timer:sleep(?TASK_REPEAT_REQUEST_TIMEOUT),
-            await_task_result(StorageOpts, NsId, KeyOrId, Timeout, Duration + ?TASK_REPEAT_REQUEST_TIMEOUT)
+            await_task_result(
+                StorageOpts, NsId, KeyOrId, Timeout, Duration + ?TASK_REPEAT_REQUEST_TIMEOUT
+            )
     end.
 
 do_get(#{ns_opts := #{storage := StorageOpts}, id := Id, ns := NsId, args := HistoryRange}) ->
@@ -187,7 +215,14 @@ do_get(#{ns_opts := #{storage := StorageOpts}, id := Id, ns := NsId, args := His
 do_get(#{ns_opts := #{storage := StorageOpts}, id := Id, ns := NsId}) ->
     prg_storage:get_process(external, StorageOpts, NsId, Id, #{}).
 
-do_put(#{ns_opts := #{storage := StorageOpts}, id := Id, ns := NsId, args := #{process := Process} = Args}= Opts) ->
+do_put(
+    #{
+        ns_opts := #{storage := StorageOpts},
+        id := Id,
+        ns := NsId,
+        args := #{process := Process} = Args
+    } = Opts
+) ->
     #{
         process_id := ProcessId
     } = Process,
@@ -298,10 +333,11 @@ action_to_task(undefined, _ProcessId, _Ctx) ->
 action_to_task(unset_timer, _ProcessId, _Ctx) ->
     undefined;
 action_to_task(#{set_timer := Timestamp} = Action, ProcessId, Context) ->
-    TaskType = case maps:get(remove, Action, false) of
-        true -> <<"remove">>;
-        false -> <<"timeout">>
-    end,
+    TaskType =
+        case maps:get(remove, Action, false) of
+            true -> <<"remove">>;
+            false -> <<"timeout">>
+        end,
     #{
         process_id => ProcessId,
         task_type => TaskType,

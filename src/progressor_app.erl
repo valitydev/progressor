@@ -19,7 +19,6 @@ stop(_State) ->
 %% internal functions
 
 create_metrics() ->
-
     _ = prometheus_histogram:new([
         {name, progressor_calls_scanning_duration_ms},
         {help, "Calls (call, repair) scanning durations in millisecond"},

@@ -49,8 +49,12 @@ get_task_result(#{client := Handler, options := HandlerOpts}, NsId, KeyOrId) ->
 get_process_status(#{client := Handler, options := HandlerOpts}, NsId, Id) ->
     Handler:get_process_status(HandlerOpts, NsId, Id).
 
--spec put_process_data(storage_opts(), namespace_id(), id(),
-    #{process := process(), init_task => task(), active_task => task()}) ->
+-spec put_process_data(
+    storage_opts(),
+    namespace_id(),
+    id(),
+    #{process := process(), init_task => task(), active_task => task()}
+) ->
     {ok, _Result} | {error, _Reason}.
 put_process_data(#{client := Handler, options := HandlerOpts}, NsId, Id, ProcessData) ->
     Handler:put_process_data(HandlerOpts, NsId, Id, ProcessData).
@@ -91,14 +95,20 @@ collect_zombies(#{client := Handler, options := HandlerOpts}, NsId, Timeout) ->
 %% Worker functions
 %%%%%%%%%%%%%%%%%%%
 
--spec complete_and_continue(storage_opts(), namespace_id(), task_result(), process(), [event()], task()) ->
+-spec complete_and_continue(
+    storage_opts(), namespace_id(), task_result(), process(), [event()], task()
+) ->
     {ok, [task()]}.
-complete_and_continue(#{client := Handler, options := HandlerOpts}, NsId, TaskResult, Process, Events, NextTask) ->
+complete_and_continue(
+    #{client := Handler, options := HandlerOpts}, NsId, TaskResult, Process, Events, NextTask
+) ->
     Handler:complete_and_continue(HandlerOpts, NsId, TaskResult, Process, Events, NextTask).
 
 -spec complete_and_suspend(storage_opts(), namespace_id(), task_result(), process(), [event()]) ->
     {ok, [task()]}.
-complete_and_suspend(#{client := Handler, options := HandlerOpts}, NsId, TaskResult, Process, Events) ->
+complete_and_suspend(
+    #{client := Handler, options := HandlerOpts}, NsId, TaskResult, Process, Events
+) ->
     Handler:complete_and_suspend(HandlerOpts, NsId, TaskResult, Process, Events).
 
 -spec complete_and_error(storage_opts(), namespace_id(), task_result(), process()) -> ok.
@@ -107,7 +117,9 @@ complete_and_error(#{client := Handler, options := HandlerOpts}, NsId, TaskResul
 
 -spec complete_and_unlock(storage_opts(), namespace_id(), task_result(), process(), [event()]) ->
     {ok, [task()]}.
-complete_and_unlock(#{client := Handler, options := HandlerOpts}, NsId, TaskResult, Process, Events) ->
+complete_and_unlock(
+    #{client := Handler, options := HandlerOpts}, NsId, TaskResult, Process, Events
+) ->
     Handler:complete_and_unlock(HandlerOpts, NsId, TaskResult, Process, Events).
 
 -spec remove_process(storage_opts(), namespace_id(), id()) -> ok | no_return().
@@ -122,7 +134,8 @@ remove_process(#{client := Handler, options := HandlerOpts}, NsId, ProcessId) ->
 get_task(StorageOpts, NsId, TaskId) ->
     get_task(internal, StorageOpts, NsId, TaskId).
 
--spec get_task(recipient(), storage_opts(), namespace_id(), task_id()) -> {ok, task()} | {error, _Reason}.
+-spec get_task(recipient(), storage_opts(), namespace_id(), task_id()) ->
+    {ok, task()} | {error, _Reason}.
 get_task(Recipient, #{client := Handler, options := HandlerOpts}, NsId, TaskId) ->
     Handler:get_task(Recipient, HandlerOpts, NsId, TaskId).
 

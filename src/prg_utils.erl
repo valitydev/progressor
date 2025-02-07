@@ -18,8 +18,7 @@ registered_name(BaseAtom, PostfixStr) ->
 pipe([], Result) -> Result;
 pipe(_Funs, {error, _} = Error) -> Error;
 pipe(_Funs, {break, Result}) -> Result;
-pipe([F | Rest], Acc) ->
-    pipe(Rest, F(Acc)).
+pipe([F | Rest], Acc) -> pipe(Rest, F(Acc)).
 
 -spec format(term()) -> binary().
 format(Term) when is_binary(Term) ->
@@ -50,7 +49,7 @@ with_observe(Fun, MetricType, MetricKey, Labels) ->
     {DurationMicro, Result} = timer:tc(Fun),
     DurationMs = DurationMicro div 1000,
     logger:debug("metric: ~p, labels: ~p, value: ~p", [MetricKey, Labels, DurationMs]),
-    collect(MetricType, MetricKey, Labels, DurationMs),
+    ok = collect(MetricType, MetricKey, Labels, DurationMs),
     Result.
 
 collect(histogram, MetricKey, Labels, Value) ->

@@ -27,7 +27,8 @@ event_sink(
 event_sink(_NsOpts, _ID, _Events) ->
     ok.
 
--spec lifecycle_sink(namespace_opts(), task_t() | {error, _Reason}, id()) -> ok | {error, _Reason} | no_return().
+-spec lifecycle_sink(namespace_opts(), task_t() | {error, _Reason}, id()) ->
+    ok | {error, _Reason} | no_return().
 lifecycle_sink(
     #{
         namespace := NS,
@@ -54,7 +55,8 @@ encode(Encoder, NS, ID, Events) ->
         #{
             key => event_key(NS, ID),
             value => Encoder(NS, ID, Event)
-        } || Event <- Events
+        }
+     || Event <- Events
     ].
 
 produce(Client, Topic, PartitionKey, Batch) ->
