@@ -5,8 +5,14 @@
 -behaviour(gen_server).
 
 -export([start_link/1]).
--export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2,
-    code_change/3]).
+-export([
+    init/1,
+    handle_call/3,
+    handle_cast/2,
+    handle_info/2,
+    terminate/2,
+    code_change/3
+]).
 
 %% API
 -export([push_task/3]).
@@ -89,19 +95,23 @@ handle_call({pop_task, Worker}, _From, State) ->
 handle_call(count_workers, _From, #prg_scheduler_state{free_workers = Workers} = State) ->
     {reply, queue:len(Workers), State};
 handle_call(
-    {capture_worker, Owner}, _From,
+    {capture_worker, Owner},
+    _From,
     #prg_scheduler_state{owners = Owners} = State
 ) when erlang:is_map_key(Owner, Owners) ->
     {reply, {error, nested_capture}, State};
 handle_call(
-    {capture_worker, Owner}, _From,
+    {capture_worker, Owner},
+    _From,
     #prg_scheduler_state{owners = Owners} = State
 ) ->
     case queue:out(State#prg_scheduler_state.free_workers) of
         {{value, Worker}, NewWorkers} ->
             MRef = erlang:monitor(process, Owner),
             NewOwners = Owners#{Owner => {MRef, Worker}},
-            {reply, {ok, Worker}, State#prg_scheduler_state{free_workers = NewWorkers, owners = NewOwners}};
+            {reply, {ok, Worker}, State#prg_scheduler_state{
+                free_workers = NewWorkers, owners = NewOwners
+            }};
         {empty, _} ->
             {reply, {error, not_found}, State}
     end;
@@ -114,7 +124,7 @@ handle_call({continuation_task, Task}, _From, State) ->
         {empty, _} ->
             {reply, ok, State}
     end;
-handle_call(_Request, _From, State = #prg_scheduler_state{}) ->
+handle_call(_Request, _From, #prg_scheduler_state{} = State) ->
     {reply, ok, State}.
 
 handle_cast({push_task, TaskHeader, Task}, State) ->
@@ -122,7 +132,7 @@ handle_cast({push_task, TaskHeader, Task}, State) ->
     {noreply, NewState};
 handle_cast(
     {return_worker, Owner, Worker},
-    State = #prg_scheduler_state{free_workers = Workers, owners = Owners}
+    #prg_scheduler_state{free_workers = Workers, owners = Owners} = State
 ) ->
     case maps:get(Owner, Owners, undefined) of
         undefined ->
@@ -135,40 +145,41 @@ handle_cast(
     {noreply, State#prg_scheduler_state{free_workers = NewWorkers, owners = NewOwners}};
 handle_cast(
     {release_worker, Owner, Worker},
-    State = #prg_scheduler_state{owners = Owners}
+    #prg_scheduler_state{owners = Owners} = State
 ) ->
-    NewState = case maps:get(Owner, Owners, undefined) of
-        undefined ->
-            State;
-        {Ref, Worker} ->
-            _ = erlang:demonitor(Ref),
-            State#prg_scheduler_state{owners = maps:without([Owner], Owners)}
-    end,
+    NewState =
+        case maps:get(Owner, Owners, undefined) of
+            undefined ->
+                State;
+            {Ref, Worker} ->
+                _ = erlang:demonitor(Ref),
+                State#prg_scheduler_state{owners = maps:without([Owner], Owners)}
+        end,
     {noreply, NewState};
-handle_cast(_Request, State = #prg_scheduler_state{}) ->
+handle_cast(_Request, #prg_scheduler_state{} = State) ->
     {noreply, State}.
 
 handle_info(
     {'DOWN', _Ref, process, Pid, _Info},
-    State = #prg_scheduler_state{owners = Owners}
+    #prg_scheduler_state{owners = Owners} = State
 ) when erlang:is_map_key(Pid, Owners) ->
     {noreply, State#prg_scheduler_state{owners = maps:without([Pid], Owners)}};
 handle_info(
     {'DOWN', _Ref, process, Pid, _Info},
-    State = #prg_scheduler_state{wrk_monitors = WrkMonitors, ns_id = NsId}
+    #prg_scheduler_state{wrk_monitors = WrkMonitors, ns_id = NsId} = State
 ) when erlang:is_map_key(Pid, WrkMonitors) ->
     WorkerSup = prg_utils:registered_name(NsId, "_worker_sup"),
     {ok, NewWrk} = supervisor:start_child(WorkerSup, []),
     MRef = erlang:monitor(process, NewWrk),
     NewWrkMonitors = maps:put(NewWrk, MRef, maps:without([Pid], WrkMonitors)),
     {noreply, State#prg_scheduler_state{wrk_monitors = NewWrkMonitors}};
-handle_info(_Info, State = #prg_scheduler_state{}) ->
+handle_info(_Info, #prg_scheduler_state{} = State) ->
     {noreply, State}.
 
-terminate(_Reason, _State = #prg_scheduler_state{}) ->
+terminate(_Reason, #prg_scheduler_state{} = _State) ->
     ok.
 
-code_change(_OldVsn, State = #prg_scheduler_state{}, _Extra) ->
+code_change(_OldVsn, #prg_scheduler_state{} = State, _Extra) ->
     {ok, State}.
 
 %%%===================================================================
@@ -178,11 +189,15 @@ code_change(_OldVsn, State = #prg_scheduler_state{}, _Extra) ->
 start_workers(NsId, NsOpts) ->
     WorkerPoolSize = maps:get(worker_pool_size, NsOpts, ?DEFAULT_WORKER_POOL_SIZE),
     WorkerSup = prg_utils:registered_name(NsId, "_worker_sup"),
-    lists:foldl(fun(_N, Acc) ->
-        {ok, Pid} = supervisor:start_child(WorkerSup, []),
-        MRef = erlang:monitor(process, Pid),
-        Acc#{Pid => MRef}
-    end, #{}, lists:seq(1, WorkerPoolSize)).
+    lists:foldl(
+        fun(_N, Acc) ->
+            {ok, Pid} = supervisor:start_child(WorkerSup, []),
+            MRef = erlang:monitor(process, Pid),
+            Acc#{Pid => MRef}
+        end,
+        #{},
+        lists:seq(1, WorkerPoolSize)
+    ).
 
 do_push_task(TaskHeader, Task, State) ->
     FreeWorkers = State#prg_scheduler_state.free_workers,
@@ -197,7 +212,7 @@ do_push_task(TaskHeader, Task, State) ->
             State#prg_scheduler_state{
                 ready = queue:in({TaskHeader, Task}, OldReady)
             }
-        end.
+    end.
 
 header() ->
     header(<<"timeout">>).

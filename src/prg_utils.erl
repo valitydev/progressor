@@ -18,8 +18,7 @@ registered_name(BaseAtom, PostfixStr) ->
 pipe([], Result) -> Result;
 pipe(_Funs, {error, _} = Error) -> Error;
 pipe(_Funs, {break, Result}) -> Result;
-pipe([F | Rest], Acc) ->
-    pipe(Rest, F(Acc)).
+pipe([F | Rest], Acc) -> pipe(Rest, F(Acc)).
 
 -spec format(term()) -> binary().
 format(Term) when is_binary(Term) ->

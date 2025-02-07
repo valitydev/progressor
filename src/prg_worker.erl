@@ -5,8 +5,14 @@
 -include("progressor.hrl").
 
 -export([start_link/2]).
--export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2,
-    code_change/3]).
+-export([
+    init/1,
+    handle_call/3,
+    handle_cast/2,
+    handle_info/2,
+    terminate/2,
+    code_change/3
+]).
 -export([handle_continue/2]).
 
 -export([process_task/3]).
@@ -39,12 +45,14 @@ start_link(NsId, NsOpts) ->
     gen_server:start_link(?MODULE, [NsId, NsOpts], []).
 
 init([NsId, NsOpts]) ->
-    {ok, #prg_worker_state{
-        ns_id = NsId,
-        ns_opts = NsOpts
-    }, {continue, do_start}}.
+    {ok,
+        #prg_worker_state{
+            ns_id = NsId,
+            ns_opts = NsOpts
+        },
+        {continue, do_start}}.
 
-handle_continue(do_start, State = #prg_worker_state{ns_id = NsId}) ->
+handle_continue(do_start, #prg_worker_state{ns_id = NsId} = State) ->
     {ok, Pid} = prg_worker_sidecar:start_link(),
     case prg_scheduler:pop_task(NsId, self()) of
         {TaskHeader, Task} ->
@@ -54,16 +62,16 @@ handle_continue(do_start, State = #prg_worker_state{ns_id = NsId}) ->
     end,
     {noreply, State#prg_worker_state{sidecar_pid = Pid}}.
 
-handle_call(_Request, _From, State = #prg_worker_state{}) ->
+handle_call(_Request, _From, #prg_worker_state{} = State) ->
     {reply, ok, State}.
 
 handle_cast(
     {process_task, TaskHeader, Task},
-    State = #prg_worker_state{
+    #prg_worker_state{
         ns_id = NsId,
         ns_opts = #{storage := StorageOpts, process_step_timeout := TimeoutSec} = _NsOpts,
         sidecar_pid = Pid
-    }
+    } = State
 ) ->
     Deadline = erlang:system_time(millisecond) + TimeoutSec * 1000,
     ProcessId = maps:get(process_id, Task),
@@ -72,9 +80,9 @@ handle_cast(
     {noreply, NewState};
 handle_cast(
     {continuation_task, TaskHeader, Task},
-    State = #prg_worker_state{
+    #prg_worker_state{
         ns_opts = #{process_step_timeout := TimeoutSec}
-    }
+    } = State
 ) ->
     Deadline = erlang:system_time(millisecond) + TimeoutSec * 1000,
     NewState = do_process_task(TaskHeader, Task, Deadline, State),
@@ -85,13 +93,13 @@ handle_cast(next_task, #prg_worker_state{sidecar_pid = CurrentPid}) ->
     true = erlang:exit(CurrentPid, kill),
     exit(normal).
 
-handle_info(_Info, State = #prg_worker_state{}) ->
+handle_info(_Info, #prg_worker_state{} = State) ->
     {noreply, State}.
 
-terminate(_Reason, _State = #prg_worker_state{}) ->
+terminate(_Reason, #prg_worker_state{} = _State) ->
     ok.
 
-code_change(_OldVsn, State = #prg_worker_state{}, _Extra) ->
+code_change(_OldVsn, #prg_worker_state{} = State, _Extra) ->
     {ok, State}.
 
 %%%===================================================================
@@ -103,12 +111,12 @@ do_process_task(
     _TaskHeader,
     #{task_type := <<"remove">>} = _Task,
     Deadline,
-    State = #prg_worker_state{
+    #prg_worker_state{
         ns_id = NsId,
         ns_opts = #{storage := StorageOpts} = NsOpts,
         process = #{process_id := ProcessId} = _Process,
         sidecar_pid = Pid
-    }
+    } = State
 ) ->
     ok = prg_worker_sidecar:lifecycle_sink(Pid, Deadline, NsOpts, remove, ProcessId),
     ok = prg_worker_sidecar:remove_process(Pid, Deadline, StorageOpts, NsId, ProcessId),
@@ -118,12 +126,12 @@ do_process_task(
     TaskHeader,
     Task,
     Deadline,
-    State = #prg_worker_state{
+    #prg_worker_state{
         ns_id = _NsId,
         ns_opts = NsOpts,
         process = Process,
         sidecar_pid = Pid
-    }
+    } = State
 ) ->
     Args = maps:get(args, Task, <<>>),
     Ctx = maps:get(context, Task, <<>>),
@@ -137,15 +145,17 @@ handle_result(
     TaskHeader,
     #{task_id := TaskId, context := Context} = Task,
     Deadline,
-    State = #prg_worker_state{
+    #prg_worker_state{
         ns_id = NsId,
         ns_opts = #{storage := StorageOpts} = NsOpts,
         process = #{process_id := ProcessId} = Process,
         sidecar_pid = Pid
-    }
+    } = State
 ) ->
     Now = erlang:system_time(second),
-    ProcessUpdated = update_process(maps:without([detail,corrupted_by], Process#{status => <<"running">>}), Result),
+    ProcessUpdated = update_process(
+        maps:without([detail, corrupted_by], Process#{status => <<"running">>}), Result
+    ),
     Response = response(maps:get(response, Result, undefined)),
     TaskResult = #{
         task_id => TaskId,
@@ -165,13 +175,23 @@ handle_result(
         },
         maps:with([metadata], Task)
     ),
-    ok = prg_worker_sidecar:lifecycle_sink(Pid, Deadline, NsOpts, extract_task_type(TaskHeader), ProcessId),
+    ok = prg_worker_sidecar:lifecycle_sink(
+        Pid, Deadline, NsOpts, extract_task_type(TaskHeader), ProcessId
+    ),
     ok = prg_worker_sidecar:event_sink(Pid, Deadline, NsOpts, ProcessId, Events),
     %% just for tests
     ok = maybe_wait_call(application:get_env(progressor, call_wait_timeout, undefined)),
     %%
-    SaveResult = prg_worker_sidecar:complete_and_continue(Pid, Deadline, StorageOpts, NsId, TaskResult,
-        ProcessUpdated, Events, NewTask),
+    SaveResult = prg_worker_sidecar:complete_and_continue(
+        Pid,
+        Deadline,
+        StorageOpts,
+        NsId,
+        TaskResult,
+        ProcessUpdated,
+        Events,
+        NewTask
+    ),
     _ = maybe_reply(TaskHeader, Response),
     case SaveResult of
         {ok, []} ->
@@ -182,19 +202,18 @@ handle_result(
             ok = continuation_task(self(), create_header(ContinuationTask), ContinuationTask),
             State#prg_worker_state{process = ProcessUpdated#{history => NewHistory}}
     end;
-
 %% success result with undefined timer and remove action
 handle_result(
     {ok, #{action := #{remove := true}} = Result},
     TaskHeader,
     _Task,
     Deadline,
-    State = #prg_worker_state{
+    #prg_worker_state{
         ns_id = NsId,
         ns_opts = #{storage := StorageOpts} = NsOpts,
         process = #{process_id := ProcessId} = _Process,
         sidecar_pid = Pid
-    }
+    } = State
 ) ->
     Response = response(maps:get(response, Result, undefined)),
     ok = prg_worker_sidecar:lifecycle_sink(Pid, Deadline, NsOpts, remove, ProcessId),
@@ -202,23 +221,26 @@ handle_result(
     _ = maybe_reply(TaskHeader, Response),
     ok = next_task(self()),
     State#prg_worker_state{process = undefined};
-
 %% success result with unset_timer action
 handle_result(
     {ok, #{events := Events, action := unset_timer} = Result},
     TaskHeader,
     #{task_id := TaskId} = _Task,
     Deadline,
-    State = #prg_worker_state{
+    #prg_worker_state{
         ns_id = NsId,
         ns_opts = #{storage := StorageOpts} = NsOpts,
         process = #{process_id := ProcessId} = Process,
         sidecar_pid = Pid
-    }
+    } = State
 ) ->
-    ok = prg_worker_sidecar:lifecycle_sink(Pid, Deadline, NsOpts, extract_task_type(TaskHeader), ProcessId),
+    ok = prg_worker_sidecar:lifecycle_sink(
+        Pid, Deadline, NsOpts, extract_task_type(TaskHeader), ProcessId
+    ),
     ok = prg_worker_sidecar:event_sink(Pid, Deadline, NsOpts, ProcessId, Events),
-    ProcessUpdated = update_process(maps:without([detail,corrupted_by], Process#{status => <<"running">>}), Result),
+    ProcessUpdated = update_process(
+        maps:without([detail, corrupted_by], Process#{status => <<"running">>}), Result
+    ),
     Response = response(maps:get(response, Result, undefined)),
     TaskResult = #{
         task_id => TaskId,
@@ -226,8 +248,15 @@ handle_result(
         finished_time => erlang:system_time(second),
         status => <<"finished">>
     },
-    SaveResult = prg_worker_sidecar:complete_and_suspend(Pid, Deadline, StorageOpts, NsId, TaskResult,
-        ProcessUpdated, Events),
+    SaveResult = prg_worker_sidecar:complete_and_suspend(
+        Pid,
+        Deadline,
+        StorageOpts,
+        NsId,
+        TaskResult,
+        ProcessUpdated,
+        Events
+    ),
     _ = maybe_reply(TaskHeader, Response),
     case SaveResult of
         {ok, []} ->
@@ -238,24 +267,27 @@ handle_result(
             ok = continuation_task(self(), create_header(ContinuationTask), ContinuationTask),
             State#prg_worker_state{process = ProcessUpdated#{history => NewHistory}}
     end;
-
 %% success repair with corrupted task and undefined action
 handle_result(
     {ok, #{events := Events} = Result},
     {repair, _} = TaskHeader,
     #{task_id := TaskId} = _Task,
     Deadline,
-    State = #prg_worker_state{
+    #prg_worker_state{
         ns_id = NsId,
         ns_opts = #{storage := StorageOpts} = NsOpts,
         process = #{process_id := ProcessId, corrupted_by := ErrorTaskId} = Process,
         sidecar_pid = Pid
-    }
+    } = State
 ) ->
     Now = erlang:system_time(second),
-    ok = prg_worker_sidecar:lifecycle_sink(Pid, Deadline, NsOpts, extract_task_type(TaskHeader), ProcessId),
+    ok = prg_worker_sidecar:lifecycle_sink(
+        Pid, Deadline, NsOpts, extract_task_type(TaskHeader), ProcessId
+    ),
     ok = prg_worker_sidecar:event_sink(Pid, Deadline, NsOpts, ProcessId, Events),
-    ProcessUpdated = update_process(maps:without([detail,corrupted_by], Process#{status => <<"running">>}), Result),
+    ProcessUpdated = update_process(
+        maps:without([detail, corrupted_by], Process#{status => <<"running">>}), Result
+    ),
     Response = response(maps:get(response, Result, undefined)),
     TaskResult = #{
         task_id => TaskId,
@@ -267,43 +299,63 @@ handle_result(
     case ErrorTask of
         #{task_type := Type} when Type =:= <<"timeout">>; Type =:= <<"remove">> ->
             %% machinegun legacy behaviour
-            NewTask0 = maps:with([process_id, task_type, scheduled_time, args, metadata, context], ErrorTask),
+            NewTask0 = maps:with(
+                [process_id, task_type, scheduled_time, args, metadata, context], ErrorTask
+            ),
             NewTask = NewTask0#{
                 status => <<"running">>,
                 running_time => Now,
                 last_retry_interval => 0,
                 attempts_count => 0
             },
-            {ok, [ContinuationTask | _]} = prg_worker_sidecar:complete_and_continue(Pid, Deadline, StorageOpts, NsId,
-                TaskResult, ProcessUpdated, Events, NewTask),
+            {ok, [ContinuationTask | _]} = prg_worker_sidecar:complete_and_continue(
+                Pid,
+                Deadline,
+                StorageOpts,
+                NsId,
+                TaskResult,
+                ProcessUpdated,
+                Events,
+                NewTask
+            ),
             _ = maybe_reply(TaskHeader, Response),
             NewHistory = maps:get(history, Process) ++ Events,
             ok = continuation_task(self(), create_header(ContinuationTask), ContinuationTask),
             State#prg_worker_state{process = ProcessUpdated#{history => NewHistory}};
         _ ->
-            {ok, []} = prg_worker_sidecar:complete_and_unlock(Pid, Deadline, StorageOpts, NsId, TaskResult,
-                ProcessUpdated, Events),
+            {ok, []} = prg_worker_sidecar:complete_and_unlock(
+                Pid,
+                Deadline,
+                StorageOpts,
+                NsId,
+                TaskResult,
+                ProcessUpdated,
+                Events
+            ),
             _ = maybe_reply(TaskHeader, Response),
             ok = next_task(self()),
             State#prg_worker_state{process = undefined}
     end;
-
 %% success result with undefined action
 handle_result(
     {ok, #{events := Events} = Result},
     TaskHeader,
     #{task_id := TaskId} = _Task,
     Deadline,
-    State = #prg_worker_state{
+    #prg_worker_state{
         ns_id = NsId,
         ns_opts = #{storage := StorageOpts} = NsOpts,
         process = #{process_id := ProcessId} = Process,
         sidecar_pid = Pid
-    }
+    } = State
 ) ->
-    ok = prg_worker_sidecar:lifecycle_sink(Pid, Deadline, NsOpts, extract_task_type(TaskHeader), ProcessId),
+    ok = prg_worker_sidecar:lifecycle_sink(
+        Pid, Deadline, NsOpts, extract_task_type(TaskHeader), ProcessId
+    ),
     ok = prg_worker_sidecar:event_sink(Pid, Deadline, NsOpts, ProcessId, Events),
-    ProcessUpdated = update_process(maps:without([detail,corrupted_by], Process#{status => <<"running">>}), Result),
+    ProcessUpdated = update_process(
+        maps:without([detail, corrupted_by], Process#{status => <<"running">>}), Result
+    ),
     Response = response(maps:get(response, Result, undefined)),
     TaskResult = #{
         task_id => TaskId,
@@ -311,8 +363,15 @@ handle_result(
         finished_time => erlang:system_time(second),
         status => <<"finished">>
     },
-    SaveResult = prg_worker_sidecar:complete_and_unlock(Pid, Deadline, StorageOpts, NsId, TaskResult,
-        ProcessUpdated, Events),
+    SaveResult = prg_worker_sidecar:complete_and_unlock(
+        Pid,
+        Deadline,
+        StorageOpts,
+        NsId,
+        TaskResult,
+        ProcessUpdated,
+        Events
+    ),
     _ = maybe_reply(TaskHeader, Response),
     case SaveResult of
         {ok, []} ->
@@ -323,56 +382,59 @@ handle_result(
             ok = continuation_task(self(), create_header(ContinuationTask), ContinuationTask),
             State#prg_worker_state{process = ProcessUpdated#{history => NewHistory}}
     end;
-
 %% calls processing error
 handle_result(
     {error, Reason} = Response,
     {TaskType, _} = TaskHeader,
     #{task_id := TaskId} = _Task,
     Deadline,
-    State = #prg_worker_state{
+    #prg_worker_state{
         ns_id = NsId,
         ns_opts = #{storage := StorageOpts} = NsOpts,
         process = #{process_id := ProcessId} = Process,
         sidecar_pid = Pid
-    }
+    } = State
 ) when
     TaskType =:= init;
     TaskType =:= call;
     TaskType =:= notify;
     TaskType =:= repair
 ->
-    ProcessUpdated = case TaskType of
-        repair ->
-            Process;
-        _ ->
-            Detail = prg_utils:format(Reason),
-            ok = prg_worker_sidecar:lifecycle_sink(Pid, Deadline, NsOpts, {error, Detail}, ProcessId),
-            Process#{status => <<"error">>, detail => Detail}
-    end,
+    ProcessUpdated =
+        case TaskType of
+            repair ->
+                Process;
+            _ ->
+                Detail = prg_utils:format(Reason),
+                ok = prg_worker_sidecar:lifecycle_sink(
+                    Pid, Deadline, NsOpts, {error, Detail}, ProcessId
+                ),
+                Process#{status => <<"error">>, detail => Detail}
+        end,
     TaskResult = #{
         task_id => TaskId,
         response => term_to_binary(Response),
         finished_time => erlang:system_time(second),
         status => <<"error">>
     },
-    ok = prg_worker_sidecar:complete_and_error(Pid, Deadline, StorageOpts, NsId, TaskResult, ProcessUpdated),
+    ok = prg_worker_sidecar:complete_and_error(
+        Pid, Deadline, StorageOpts, NsId, TaskResult, ProcessUpdated
+    ),
     _ = maybe_reply(TaskHeader, Response),
     ok = next_task(self()),
     State#prg_worker_state{process = undefined};
-
 %% timeout/remove processing error
 handle_result(
     {error, Reason} = Response,
     {TaskType, _} = TaskHeader,
     #{task_id := TaskId} = Task,
     Deadline,
-    State = #prg_worker_state{
+    #prg_worker_state{
         ns_id = NsId,
         ns_opts = #{storage := StorageOpts, retry_policy := RetryPolicy} = NsOpts,
         process = #{process_id := ProcessId} = Process,
         sidecar_pid = Pid
-    }
+    } = State
 ) when TaskType =:= timeout; TaskType =:= remove ->
     TaskResult = #{
         task_id => TaskId,
@@ -380,25 +442,42 @@ handle_result(
         finished_time => erlang:system_time(second),
         status => <<"error">>
     },
-    _ = case check_retryable(TaskHeader, Task, RetryPolicy, Reason) of
-        not_retryable ->
-            Detail = prg_utils:format(Reason),
-            ProcessUpdated = Process#{status => <<"error">>, detail => Detail, corrupted_by => TaskId},
-            ok = prg_worker_sidecar:lifecycle_sink(Pid, Deadline, NsOpts, {error, Detail}, ProcessId),
-            ok = prg_worker_sidecar:complete_and_error(Pid, Deadline, StorageOpts, NsId, TaskResult, ProcessUpdated);
-        NewTask ->
-            {ok, _} = prg_worker_sidecar:complete_and_continue(Pid, Deadline, StorageOpts, NsId,
-                TaskResult, Process, [], NewTask)
-    end,
+    _ =
+        case check_retryable(TaskHeader, Task, RetryPolicy, Reason) of
+            not_retryable ->
+                Detail = prg_utils:format(Reason),
+                ProcessUpdated = Process#{
+                    status => <<"error">>, detail => Detail, corrupted_by => TaskId
+                },
+                ok = prg_worker_sidecar:lifecycle_sink(Pid, Deadline, NsOpts, {error, Detail}, ProcessId),
+                ok = prg_worker_sidecar:complete_and_error(
+                    Pid, Deadline, StorageOpts, NsId, TaskResult, ProcessUpdated
+                );
+            NewTask ->
+                {ok, _} = prg_worker_sidecar:complete_and_continue(
+                    Pid,
+                    Deadline,
+                    StorageOpts,
+                    NsId,
+                    TaskResult,
+                    Process,
+                    [],
+                    NewTask
+                )
+        end,
     ok = next_task(self()),
     State#prg_worker_state{process = undefined}.
 
 update_process(Process, Result) ->
-    maps:fold(fun
-        (metadata, Meta, Acc) -> Acc#{metadata => Meta};
-        (aux_state, AuxState, Acc) -> Acc#{aux_state => AuxState};
-        (_, _, Acc) -> Acc
-    end, Process, Result).
+    maps:fold(
+        fun
+            (metadata, Meta, Acc) -> Acc#{metadata => Meta};
+            (aux_state, AuxState, Acc) -> Acc#{aux_state => AuxState};
+            (_, _, Acc) -> Acc
+        end,
+        Process,
+        Result
+    ).
 
 -spec maybe_reply(task_header(), term()) -> term().
 maybe_reply({_, undefined}, _) ->
@@ -427,7 +506,16 @@ check_retryable(TaskHeader, #{last_retry_interval := LastInterval} = Task, Retry
     case is_retryable(Error, TaskHeader, RetryPolicy, Timeout, Attempts) of
         true ->
             maps:with(
-                [process_id, task_type, status, scheduled_time, args, last_retry_interval, attempts_count, metadata],
+                [
+                    process_id,
+                    task_type,
+                    status,
+                    scheduled_time,
+                    args,
+                    last_retry_interval,
+                    attempts_count,
+                    metadata
+                ],
                 Task#{
                     status => <<"waiting">>,
                     scheduled_time => Now + Timeout,
@@ -458,7 +546,6 @@ is_retryable(
     Timeout < maps:get(max_timeout, RetryPolicy, infinity) andalso
         Attempts < maps:get(max_attempts, RetryPolicy, infinity) andalso
         not lists:any(fun(E) -> Error =:= E end, maps:get(non_retryable_errors, RetryPolicy, []));
-
 is_retryable({exception, _, _} = _Error, _TaskHeader, _RetryPolicy, _Timeout, _Attempts) ->
     false;
 is_retryable(Error, {timeout, undefined}, RetryPolicy, Timeout, Attempts) ->

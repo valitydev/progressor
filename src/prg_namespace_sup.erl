@@ -14,7 +14,8 @@
 %%% API functions
 %%%===================================================================
 
--spec(start_link({namespace_id(), namespace_opts()}) -> {ok, Pid :: pid()} | ignore | {error, Reason :: term()}).
+-spec start_link({namespace_id(), namespace_opts()}) ->
+    {ok, Pid :: pid()} | ignore | {error, Reason :: term()}.
 start_link({NsId, #{storage := StorageOpts}} = NS) ->
     ok = prg_storage:db_init(StorageOpts, NsId),
     RegName = prg_utils:registered_name(NsId, "_namespace_sup"),
@@ -27,9 +28,11 @@ start_link({NsId, #{storage := StorageOpts}} = NS) ->
 init({NsId, _NsOpts} = NS) ->
     MaxRestarts = 1000,
     MaxSecondsBetweenRestarts = 3600,
-    SupFlags = #{strategy => one_for_all,
+    SupFlags = #{
+        strategy => one_for_all,
         intensity => MaxRestarts,
-        period => MaxSecondsBetweenRestarts},
+        period => MaxSecondsBetweenRestarts
+    },
     SchedulerSpec = #{
         id => prg_utils:registered_name(NsId, "_scheduler"),
         start => {prg_scheduler, start_link, [NS]}

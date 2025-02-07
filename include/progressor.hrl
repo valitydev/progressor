@@ -1,4 +1,3 @@
-
 %%%
 %%% Base entities
 %%%
@@ -137,7 +136,8 @@
 -define(DEFAULT_STEP_TIMEOUT_SEC, 60).
 
 -define(DEFAULT_RETRY_POLICY, #{
-    initial_timeout => 5, %% second
+    %% second
+    initial_timeout => 5,
     backoff_coefficient => 1.0,
     max_attempts => 3
 }).

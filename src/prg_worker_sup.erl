@@ -12,7 +12,7 @@
 %%% API functions
 %%%===================================================================
 
--spec(start_link(term()) -> {ok, Pid :: pid()} | ignore | {error, Reason :: term()}).
+-spec start_link(term()) -> {ok, Pid :: pid()} | ignore | {error, Reason :: term()}.
 start_link({NsId, _} = NS) ->
     RegName = prg_utils:registered_name(NsId, "_worker_sup"),
     supervisor:start_link({local, RegName}, ?MODULE, NS).
