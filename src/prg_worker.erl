@@ -73,39 +73,17 @@ handle_cast(
 handle_cast(
     {continuation_task, TaskHeader, Task},
     State = #prg_worker_state{
-            ns_opts = #{process_step_timeout := TimeoutSec}
+        ns_opts = #{process_step_timeout := TimeoutSec}
     }
 ) ->
     Deadline = erlang:system_time(millisecond) + TimeoutSec * 1000,
     NewState = do_process_task(TaskHeader, Task, Deadline, State),
     {noreply, NewState};
-handle_cast(
-    next_task,
-    _State = #prg_worker_state{
-        ns_id = _NsId,
-        ns_opts = #{storage := _StorageOpts, process_step_timeout := _TimeoutSec},
-        sidecar_pid = CurrentPid
-    }
-) ->
+handle_cast(next_task, #prg_worker_state{sidecar_pid = CurrentPid}) ->
     %% kill sidecar and restart to clear memory
     true = erlang:unlink(CurrentPid),
     true = erlang:exit(CurrentPid, kill),
     exit(normal).
-    %% restart sidecar to clear memory
-%    true = erlang:unlink(CurrentPid),
-%    true = erlang:exit(CurrentPid, kill),
-%    {ok, Pid} = prg_worker_sidecar:start_link(),
-%    NewState =
-%        case prg_scheduler:pop_task(NsId, self()) of
-%            {TaskHeader, Task} ->
-%                Deadline = erlang:system_time(millisecond) + TimeoutSec * 1000,
-%                ProcessId = maps:get(process_id, Task),
-%                {ok, Process} = prg_worker_sidecar:get_process(Pid, Deadline, StorageOpts, NsId, ProcessId),
-%                do_process_task(TaskHeader, Task, Deadline, State#prg_worker_state{process = Process, sidecar_pid = Pid});
-%            not_found ->
-%                State#prg_worker_state{sidecar_pid = Pid}
-%        end,
-%    {noreply, NewState}.
 
 handle_info(_Info, State = #prg_worker_state{}) ->
     {noreply, State}.

@@ -9,7 +9,6 @@
     jsx,
     prometheus,
     epg_connector,
-    %% recon,
     thrift,
     mg_proto,
     brod
