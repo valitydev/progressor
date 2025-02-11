@@ -67,8 +67,7 @@ handle_call({destroy_namespace, ID}, _From, State) ->
     end;
 handle_call(Call, From, State) ->
     ok = logger:error("unexpected gen_server call received: ~p from ~p", [Call, From]),
-    Reply = ok,
-    {reply, Reply, State}.
+    {noreply, State}.
 
 handle_cast(Cast, State) ->
     ok = logger:error("unexpected gen_server cast received: ~p", [Cast]),
