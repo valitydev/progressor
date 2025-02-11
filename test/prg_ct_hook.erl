@@ -10,6 +10,7 @@
 init(_Id, State) ->
     _ = start_applications(),
     _ = create_kafka_topics(),
+    _ = create_namespaces(),
     State.
 
 pre_init_per_suite(_SuiteName, Config, State) ->
@@ -66,22 +67,6 @@ app_env(progressor) ->
             worker_pool_size => 10,
             %% seconds
             process_step_timeout => 10
-        }},
-
-        {namespaces, #{
-            'default/default' => #{
-                processor => #{
-                    client => prg_ct_processor,
-                    options => #{}
-                },
-                notifier => #{
-                    client => default_kafka_client,
-                    options => #{
-                        topic => ?EVENTSINK_TOPIC,
-                        lifecycle_topic => ?LIFECYCLE_TOPIC
-                    }
-                }
-            }
         }}
     ];
 app_env(epg_connector) ->
@@ -131,3 +116,18 @@ create_kafka_topics() ->
         }
     ],
     _ = brod:create_topics(?BROKERS, TopicConfig, #{timeout => 5000}).
+
+create_namespaces() ->
+    ok = prg_manager:create_namespace('default/default', #{
+        processor => #{
+            client => prg_ct_processor,
+            options => #{}
+        },
+        notifier => #{
+            client => default_kafka_client,
+            options => #{
+                topic => ?EVENTSINK_TOPIC,
+                lifecycle_topic => ?LIFECYCLE_TOPIC
+            }
+        }
+    }).
