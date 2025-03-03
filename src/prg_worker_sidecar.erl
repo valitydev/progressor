@@ -27,6 +27,7 @@
 -export([lifecycle_sink/5]).
 %%
 -export([get_process/5]).
+-export([get_process/6]).
 -export([get_task/5]).
 
 -type context() :: binary().
@@ -166,7 +167,13 @@ lifecycle_sink(Pid, Deadline, #{namespace := NS} = NsOpts, TaskType, ProcessId) 
     {ok, process()} | {error, _Reason}.
 get_process(Pid, _Deadline, StorageOpts, NsId, ProcessId) ->
     %% Timeout = Deadline - erlang:system_time(millisecond),
-    gen_server:call(Pid, {get_process, StorageOpts, NsId, ProcessId}, infinity).
+    gen_server:call(Pid, {get_process, StorageOpts, NsId, ProcessId, #{}}, infinity).
+
+-spec get_process(pid(), timestamp_ms(), storage_opts(), namespace_id(), id(), history_range()) ->
+    {ok, process()} | {error, _Reason}.
+get_process(Pid, _Deadline, StorageOpts, NsId, ProcessId, HistoryRange) ->
+    %% Timeout = Deadline - erlang:system_time(millisecond),
+    gen_server:call(Pid, {get_process, StorageOpts, NsId, ProcessId, HistoryRange}, infinity).
 
 -spec get_task(pid(), timestamp_ms(), storage_opts(), namespace_id(), task_id()) ->
     {ok, task()} | {error, _Reason}.
@@ -230,12 +237,12 @@ handle_call(
     Response = do_with_retry(Fun, ?DEFAULT_DELAY),
     {reply, Response, State};
 handle_call(
-    {get_process, StorageOpts, NsId, ProcessId},
+    {get_process, StorageOpts, NsId, ProcessId, HistoryRange},
     _From,
     #prg_sidecar_state{} = State
 ) ->
     Fun = fun() ->
-        prg_storage:get_process(StorageOpts, NsId, ProcessId)
+        prg_storage:get_process(internal, StorageOpts, NsId, ProcessId, HistoryRange)
     end,
     Response = do_with_retry(Fun, ?DEFAULT_DELAY),
     {reply, Response, State};
