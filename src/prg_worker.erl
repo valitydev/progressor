@@ -154,6 +154,7 @@ maybe_restore_history(
         process = #{process_id := ProcessId} = Process
     } = State
 ) ->
+    %% TODO
     Deadline = erlang:system_time(millisecond) + TimeoutSec * 1000,
     {ok, #{history := FullHistory}} = prg_worker_sidecar:get_process(Pid, Deadline, StorageOpts, NsId, ProcessId, #{}),
     State#prg_worker_state{process = Process#{history => FullHistory}}.
