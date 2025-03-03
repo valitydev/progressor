@@ -9,6 +9,7 @@
 -export([init/1]).
 -export([call/1]).
 -export([repair/1]).
+-export([simple_repair/1]).
 -export([get/1]).
 -export([put/1]).
 %% TODO
@@ -26,7 +27,8 @@
     id := id(),
     args => term(),
     idempotency_key => binary(),
-    context => binary()
+    context => binary(),
+    range => history_range()
 }.
 
 %% see receive blocks bellow in this module
@@ -74,6 +76,20 @@ repair(Req) ->
             fun process_call/1
         ],
         Req#{type => repair}
+    ).
+
+-spec simple_repair(request()) -> {ok, _Result} | {error, _Reason}.
+simple_repair(Req) ->
+    prg_utils:pipe(
+        [
+            fun add_ns_opts/1,
+            fun check_idempotency/1,
+            fun(Data) -> check_process_status(Data, <<"error">>) end,
+            fun add_task/1,
+            fun(Data) -> prepare_postponed(fun prg_storage:prepare_call/4, Data) end,
+            fun(_Data) -> {ok, ok} end
+        ],
+        Req#{type => timeout}
     ).
 
 -spec get(request()) -> {ok, _Result} | {error, _Reason}.
@@ -139,7 +155,8 @@ add_task(#{id := Id, type := Type} = Opts) ->
         process_id => Id,
         args => Args,
         task_type => convert_task_type(Type),
-        context => Context
+        context => Context,
+        metadata => #{range => maps:get(range, Opts, #{})}
     },
     Task = make_task(maybe_add_idempotency(TaskData, maps:get(idempotency_key, Opts, undefined))),
     Opts#{task => Task}.
@@ -179,6 +196,23 @@ prepare(
                 {error, _Reason} = ERR ->
                     ERR
             end;
+        {error, _} = Error ->
+            Error
+    end.
+
+prepare_postponed(
+    Fun,
+    #{ns_opts := #{storage := StorageOpts}, ns := NsId, id := ProcessId, task := Task} = Req
+) ->
+    TaskType = maps:get(task_type, Task),
+    PrepareResult = prg_utils:with_observe(
+        fun() -> Fun(StorageOpts, NsId, ProcessId, Task#{status => <<"waiting">>}) end,
+        ?PREPARING_KEY,
+        [erlang:atom_to_binary(NsId, utf8), TaskType]
+    ),
+    case PrepareResult of
+        {ok, {postpone, TaskId}} ->
+            Req#{task => Task#{task_id => TaskId}};
         {error, _} = Error ->
             Error
     end.
@@ -268,6 +302,8 @@ make_task_header(call, Ref) ->
     {call, {self(), Ref}};
 make_task_header(repair, Ref) ->
     {repair, {self(), Ref}};
+make_task_header(timeout, _Ref) ->
+    {timeout, undefined};
 make_task_header(notify, _Ref) ->
     {notify, undefined}.
 
@@ -277,6 +313,8 @@ convert_task_type(call) ->
     <<"call">>;
 convert_task_type(notify) ->
     <<"notify">>;
+convert_task_type(timeout) ->
+    <<"timeout">>;
 convert_task_type(repair) ->
     <<"repair">>.
 
@@ -295,6 +333,17 @@ make_task(#{task_type := TaskType} = TaskData) when
         status => <<"running">>,
         scheduled_time => Now,
         running_time => Now,
+        last_retry_interval => 0,
+        attempts_count => 0
+    },
+    maps:merge(Defaults, TaskData);
+make_task(#{task_type := <<"timeout">>} = TaskData) ->
+    Now = erlang:system_time(second),
+    Defaults = #{
+        %% TODO
+        metadata => #{<<"kind">> => <<"simple_repair">>},
+        status => <<"waiting">>,
+        scheduled_time => Now,
         last_retry_interval => 0,
         attempts_count => 0
     },
@@ -326,7 +375,6 @@ check_for_run(undefined) ->
     <<"waiting">>;
 check_for_run(Pid) when is_pid(Pid) ->
     <<"running">>.
-%%
 
 action_to_task(undefined, _ProcessId, _Ctx) ->
     undefined;

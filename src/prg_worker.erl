@@ -75,7 +75,8 @@ handle_cast(
 ) ->
     Deadline = erlang:system_time(millisecond) + TimeoutSec * 1000,
     ProcessId = maps:get(process_id, Task),
-    {ok, Process} = prg_worker_sidecar:get_process(Pid, Deadline, StorageOpts, NsId, ProcessId),
+    HistoryRange = maps:get(range, maps:get(metadata, Task, #{}), #{}),
+    {ok, Process} = prg_worker_sidecar:get_process(Pid, Deadline, StorageOpts, NsId, ProcessId, HistoryRange),
     NewState = do_process_task(TaskHeader, Task, Deadline, State#prg_worker_state{process = Process}),
     {noreply, NewState};
 handle_cast(
@@ -137,7 +138,26 @@ do_process_task(
     Ctx = maps:get(context, Task, <<>>),
     Request = {extract_task_type(TaskHeader), Args, Process},
     Result = prg_worker_sidecar:process(Pid, Deadline, NsOpts, Request, Ctx),
-    handle_result(Result, TaskHeader, Task, Deadline, State).
+    State1 = maybe_restore_history(Task, State),
+    handle_result(Result, TaskHeader, Task, Deadline, State1).
+
+%% if task range undefined then history is full
+maybe_restore_history(#{metadata := #{range := Range}}, State) when map_size(Range) =:= 0 ->
+    State;
+%% if task range is defined then need restore full history for continuation
+maybe_restore_history(
+    _,
+    #prg_worker_state{
+        ns_id = NsId,
+        ns_opts = #{storage := StorageOpts, process_step_timeout := TimeoutSec} = _NsOpts,
+        sidecar_pid = Pid,
+        process = #{process_id := ProcessId} = Process
+    } = State
+) ->
+    %% TODO
+    Deadline = erlang:system_time(millisecond) + TimeoutSec * 1000,
+    {ok, #{history := FullHistory}} = prg_worker_sidecar:get_process(Pid, Deadline, StorageOpts, NsId, ProcessId, #{}),
+    State#prg_worker_state{process = Process#{history => FullHistory}}.
 
 %% success result with timer
 handle_result(

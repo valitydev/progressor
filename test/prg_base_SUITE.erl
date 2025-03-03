@@ -12,11 +12,13 @@
 %% Tests
 -export([simple_timers_test/1]).
 -export([simple_call_test/1]).
+-export([simple_call_with_range_test/1]).
 -export([call_replace_timer_test/1]).
 -export([call_unset_timer_test/1]).
 -export([postponed_call_test/1]).
 -export([postponed_call_to_suspended_process_test/1]).
 -export([multiple_calls_test/1]).
+-export([simple_repair_after_non_retriable_error_test/1]).
 -export([repair_after_non_retriable_error_test/1]).
 -export([error_after_max_retries_test/1]).
 -export([repair_after_call_error_test/1]).
@@ -38,11 +40,13 @@ all() ->
     [
         simple_timers_test,
         simple_call_test,
+        simple_call_with_range_test,
         call_replace_timer_test,
         call_unset_timer_test,
         postponed_call_test,
         postponed_call_to_suspended_process_test,
         multiple_calls_test,
+        simple_repair_after_non_retriable_error_test,
         repair_after_non_retriable_error_test,
         error_after_max_retries_test,
         repair_after_call_error_test,
@@ -126,6 +130,38 @@ simple_call_test(_C) ->
     unmock_processor(),
     ok.
 %%
+-spec simple_call_with_range_test(_) -> _.
+simple_call_with_range_test(_C) ->
+    %% steps:
+    %% 1. init ->    [event1, event2, event3, event4], timer 2s
+    %% 2. call range limit 2 offset 1 ->    [event5], timer 0s
+    %% 3. timeout -> [event6], undefined
+    _ = mock_processor(simple_call_with_range_test),
+    Id = gen_id(),
+    {ok, ok} = progressor:init(#{ns => ?NS, id => Id, args => <<"init_args">>}),
+    {ok, <<"response">>} = progressor:call(#{
+        ns => ?NS,
+        id => Id,
+        args => <<"call_args">>,
+        range => #{offset => 1, limit => 2}
+    }),
+    3 = expect_steps_counter(3),
+    {ok, #{
+        process_id := Id,
+        status := <<"running">>,
+        history := [
+            #{event_id := 1},
+            #{event_id := 2},
+            #{event_id := 3},
+            #{event_id := 4},
+            #{event_id := 5},
+            #{event_id := 6}
+        ]
+    }} = progressor:get(#{ns => ?NS, id => Id}),
+    unmock_processor(),
+    ok.
+%%
+
 -spec call_replace_timer_test(_) -> _.
 call_replace_timer_test(_C) ->
     %% steps:
@@ -293,6 +329,48 @@ multiple_calls_test(_C) ->
             #{event_id := 10}
         ]
     }} = progressor:get(#{ns => ?NS, id => Id}),
+    unmock_processor(),
+    ok.
+
+-spec simple_repair_after_non_retriable_error_test(_) -> _.
+simple_repair_after_non_retriable_error_test(_C) ->
+    %% steps:
+    %% 1. init                            -> [],       timer 0s
+    %% 2. timeout                         -> {error, do_not_retry}
+    %% 3. timeout(via simple repair call) -> [event1], undefined
+    %% 4. timeout                         -> [event2], undefined
+    _ = mock_processor(simple_repair_after_non_retriable_error_test),
+    Id = gen_id(),
+    {ok, ok} = progressor:init(#{ns => ?NS, id => Id, args => <<"init_args">>}),
+    2 = expect_steps_counter(2),
+    {ok, #{
+        detail := <<"do_not_retry">>,
+        history := [],
+        process_id := Id,
+        status := <<"error">>
+    }} = progressor:get(#{ns => ?NS, id => Id}),
+    {ok, ok} = progressor:simple_repair(#{ns => ?NS, id => Id, context => <<"simple_repair_ctx">>}),
+    4 = expect_steps_counter(4),
+    {ok,
+        #{
+            process_id := Id,
+            status := <<"running">>,
+            history := [
+                #{
+                    event_id := 1,
+                    metadata := #{<<"format_version">> := 1},
+                    payload := _Pl1,
+                    timestamp := _Ts1
+                },
+                #{
+                    event_id := 2,
+                    metadata := #{<<"format_version">> := 1},
+                    payload := _Pl2,
+                    timestamp := _Ts2
+                }
+            ]
+        } = Process} = progressor:get(#{ns => ?NS, id => Id}),
+    false = erlang:is_map_key(detail, Process),
     unmock_processor(),
     ok.
 
@@ -630,6 +708,39 @@ mock_processor(simple_call_test = TestCase) ->
     end,
     mock_processor(TestCase, MockProcessor);
 %%
+mock_processor(simple_call_with_range_test = TestCase) ->
+    Self = self(),
+    MockProcessor = fun
+        ({init, <<"init_args">>, _Process}, _Opts, _Ctx) ->
+            Result = #{
+                events => [event(1), event(2), event(3), event(4)]
+            },
+            Self ! 1,
+            {ok, Result};
+        ({call, <<"call_args">>, #{history := History} = _Process}, _Opts, _Ctx) ->
+            %% call with range limit=2, offset=1
+            ?assertEqual(2, erlang:length(History)),
+            [
+                #{event_id := 2},
+                #{event_id := 3}
+            ] = History,
+            Result = #{
+                response => <<"response">>,
+                events => [event(5)],
+                action => #{set_timer => erlang:system_time(second)}
+            },
+            Self ! 2,
+            {ok, Result};
+        ({timeout, <<>>, #{history := History} = _Process}, _Opts, _Ctx) ->
+            ?assertEqual(5, erlang:length(History)),
+            Result = #{
+                events => [event(6)]
+            },
+            Self ! 3,
+            {ok, Result}
+    end,
+    mock_processor(TestCase, MockProcessor);
+%%
 mock_processor(call_replace_timer_test = TestCase) ->
     Self = self(),
     MockProcessor = fun
@@ -770,6 +881,37 @@ mock_processor(multiple_calls_test = TestCase) ->
                 events => [event(N)]
             },
             Self ! iterate,
+            {ok, Result}
+    end,
+    mock_processor(TestCase, MockProcessor);
+%%
+mock_processor(simple_repair_after_non_retriable_error_test = TestCase) ->
+    Self = self(),
+    MockProcessor = fun
+        ({init, <<"init_args">>, _Process}, _Opts, _Ctx) ->
+            Result = #{
+                events => [],
+                action => #{set_timer => erlang:system_time(second)}
+            },
+            Self ! 1,
+            {ok, Result};
+        ({timeout, <<>>, #{history := []} = _Process}, _Opts, <<>>) ->
+            Self ! 2,
+            {error, do_not_retry};
+        ({timeout, <<>>, #{history := []} = _Process}, _Opts, <<"simple_repair_ctx">>) ->
+            %% timeout via simple repair
+            Result = #{
+                events => [event(1)],
+                action => #{set_timer => erlang:system_time(second)}
+            },
+            Self ! 3,
+            {ok, Result};
+        ({timeout, <<>>, #{history := History} = _Process}, _Opts, _Ctx) ->
+            ?assertEqual(1, erlang:length(History)),
+            Result = #{
+                events => [event(2)]
+            },
+            Self ! 4,
             {ok, Result}
     end,
     mock_processor(TestCase, MockProcessor);
