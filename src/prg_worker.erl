@@ -144,7 +144,7 @@ do_process_task(
 %% if task range undefined then history is full
 maybe_restore_history(#{metadata := #{range := Range}}, State) when map_size(Range) =:= 0 ->
     State;
-%% if task range is defined then need respore full history for continuation
+%% if task range is defined then need restore full history for continuation
 maybe_restore_history(
     _,
     #prg_worker_state{
