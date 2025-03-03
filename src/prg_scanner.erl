@@ -40,14 +40,15 @@ init(
         rescan_timeout = RescanTimeoutMs,
         step_timeout = StepTimeoutMs
     },
-    _ = case maps:get(worker_pool_size, Opts) > 0 of
-        true ->
-            _ = start_rescan_timers(RescanTimeoutMs),
-            _ = start_rescan_calls((RescanTimeoutMs div 3) + 100),
-            _ = start_zombie_collector(StepTimeoutMs);
-        false ->
-            skip_scanning
-    end,
+    _ =
+        case maps:get(worker_pool_size, Opts) > 0 of
+            true ->
+                _ = start_rescan_timers(RescanTimeoutMs),
+                _ = start_rescan_calls((RescanTimeoutMs div 3) + 100),
+                _ = start_zombie_collector(StepTimeoutMs);
+            false ->
+                skip_scanning
+        end,
     {ok, State}.
 
 handle_call(_Request, _From, State) ->
