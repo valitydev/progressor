@@ -145,7 +145,13 @@ simple_call_with_range_test(_C) ->
         args => <<"call_args">>,
         range => #{offset => 1, limit => 2}
     }),
-    3 = expect_steps_counter(3),
+    {ok, <<"response">>} = progressor:call(#{
+        ns => ?NS,
+        id => Id,
+        args => <<"call_args_back">>,
+        range => #{offset => 1, limit => 2, direction => backward}
+    }),
+    4 = expect_steps_counter(4),
     {ok, #{
         process_id := Id,
         status := <<"running">>,
@@ -155,9 +161,21 @@ simple_call_with_range_test(_C) ->
             #{event_id := 3},
             #{event_id := 4},
             #{event_id := 5},
-            #{event_id := 6}
+            #{event_id := 6},
+            #{event_id := 7}
         ]
     }} = progressor:get(#{ns => ?NS, id => Id}),
+    {ok, #{
+        process_id := Id,
+        status := <<"running">>,
+        history := [
+            #{event_id := 5},
+            #{event_id := 4},
+            #{event_id := 3},
+            #{event_id := 2},
+            #{event_id := 1}
+        ]
+    }} = progressor:get(#{ns => ?NS, id => Id, range => #{offset => 2, direction => backward}}),
     unmock_processor(),
     ok.
 %%
@@ -726,17 +744,30 @@ mock_processor(simple_call_with_range_test = TestCase) ->
             ] = History,
             Result = #{
                 response => <<"response">>,
-                events => [event(5)],
-                action => #{set_timer => erlang:system_time(second)}
+                events => [event(5)]
             },
             Self ! 2,
             {ok, Result};
-        ({timeout, <<>>, #{history := History} = _Process}, _Opts, _Ctx) ->
-            ?assertEqual(5, erlang:length(History)),
+        ({call, <<"call_args_back">>, #{history := History} = _Process}, _Opts, _Ctx) ->
+            %% call with range limit=2, offset=1 direction=backward
+            ?assertEqual(2, erlang:length(History)),
+            [
+                #{event_id := 4},
+                #{event_id := 3}
+            ] = History,
             Result = #{
-                events => [event(6)]
+                response => <<"response">>,
+                events => [event(6)],
+                action => #{set_timer => erlang:system_time(second)}
             },
             Self ! 3,
+            {ok, Result};
+        ({timeout, <<>>, #{history := History} = _Process}, _Opts, _Ctx) ->
+            ?assertEqual(6, erlang:length(History)),
+            Result = #{
+                events => [event(7)]
+            },
+            Self ! 4,
             {ok, Result}
     end,
     mock_processor(TestCase, MockProcessor);

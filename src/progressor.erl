@@ -246,6 +246,8 @@ await_task_result(StorageOpts, NsId, KeyOrId, Timeout, Duration) ->
 
 do_get(#{ns_opts := #{storage := StorageOpts}, id := Id, ns := NsId, args := HistoryRange}) ->
     prg_storage:get_process(external, StorageOpts, NsId, Id, HistoryRange);
+do_get(#{ns_opts := #{storage := StorageOpts}, id := Id, ns := NsId, range := HistoryRange}) ->
+    prg_storage:get_process(external, StorageOpts, NsId, Id, HistoryRange);
 do_get(#{ns_opts := #{storage := StorageOpts}, id := Id, ns := NsId}) ->
     prg_storage:get_process(external, StorageOpts, NsId, Id, #{}).
 
