@@ -79,36 +79,51 @@ get_process_status(PgOpts, NsId, Id) ->
         [{Status}] -> {ok, Status}
     end.
 
--spec get_process(recipient(), pg_opts(), namespace_id(), id(), history_range()) -> {ok, process()}.
+-spec get_process(recipient(), pg_opts(), namespace_id(), id(), history_range()) ->
+    {ok, process()} | {error, _Reason}.
 get_process(Recipient, PgOpts, NsId, ProcessId, HistoryRange) ->
     Pool = get_pool(Recipient, PgOpts),
-    EventsTable = construct_table_name(NsId, "_events"),
-    ProcessesTable = construct_table_name(NsId, "_processes"),
-    RangeCondition = create_range_condition(HistoryRange),
-    %% TODO optimize request
-    {ok, Columns, Rows} = epg_pool:query(
+    #{
+        processes := ProcessesTable,
+        events := EventsTable
+    } = tables(NsId),
+    RawResult = epg_pool:transaction(
         Pool,
-        "SELECT pr.process_id, pr.status, pr.detail, pr.aux_state, pr.metadata as p_meta, pr.corrupted_by,"
-        "    ev.event_id, ev.timestamp, ev.metadata, ev.payload "
-        "FROM "
-        "  (SELECT * FROM " ++ ProcessesTable ++
-            " WHERE process_id = $1) AS pr "
-            "   LEFT JOIN (SELECT * FROM " ++ EventsTable ++ RangeCondition ++
-            " ORDER BY event_id ASC) AS ev "
-            "   ON ev.process_id = pr.process_id ",
-        [ProcessId]
+        fun(Connection) ->
+            case do_get_process(Connection, ProcessesTable, ProcessId) of
+                {ok, _, []} ->
+                    {error, <<"process not found">>};
+                {ok, _ColumnsPr, _RowsPr} = ProcResult ->
+                    {ok, _, _} =
+                        EventsResult = do_get_events(Connection, EventsTable, ProcessId, HistoryRange),
+                    {ok, ProcResult, EventsResult}
+            end
+        end
     ),
-    case Rows of
-        [] ->
-            {error, <<"process not found">>};
-        [Head | _] ->
-            [Proc] = to_maps(Columns, [Head], fun marshal_process/1),
-            Events = lists:filter(
-                fun(Rec) -> is_map_key(event_id, Rec) end,
-                to_maps(Columns, Rows, fun marshal_event/1)
-            ),
-            {ok, Proc#{history => Events}}
+    case RawResult of
+        {error, _} = Error ->
+            Error;
+        {ok, {ok, ProcColumns, ProcRows}, {ok, EventsColumns, EventsRows}} ->
+            [Process] = to_maps(ProcColumns, ProcRows, fun marshal_process/1),
+            History = to_maps(EventsColumns, EventsRows, fun marshal_event/1),
+            {ok, Process#{history => History}}
     end.
+
+do_get_process(Connection, Table, ProcessId) ->
+    epg_pool:query(
+        Connection,
+        "SELECT * from " ++ Table ++ " WHERE process_id = $1",
+        [ProcessId]
+    ).
+
+do_get_events(Connection, EventsTable, ProcessId, HistoryRange) ->
+    RangeCondition = create_range_condition(HistoryRange),
+    SQL = "SELECT * FROM " ++ EventsTable ++ " WHERE process_id = $1 " ++ RangeCondition,
+    epg_pool:query(
+        Connection,
+        SQL,
+        [ProcessId]
+    ).
 
 -spec put_process_data(
     pg_opts(),
@@ -783,14 +798,51 @@ tables(NsId) ->
         events => construct_table_name(NsId, "_events")
     }.
 
-create_range_condition(#{offset := Offset, limit := Limit}) ->
-    " WHERE event_id > " ++ integer_to_list(Offset) ++ " AND event_id <= " ++ integer_to_list(Offset + Limit) ++ " ";
-create_range_condition(#{offset := Offset}) ->
-    " WHERE event_id > " ++ integer_to_list(Offset) ++ " ";
-create_range_condition(#{limit := Limit}) ->
-    " WHERE event_id <= " ++ integer_to_list(Limit) ++ " ";
-create_range_condition(_) ->
+create_range_condition(Range) ->
+    order_by(Range) ++ limit(Range) ++ offset(Range).
+
+%range_where(#{direction := backward, limit := Limit, offset := })
+
+order_by(#{direction := backward}) ->
+    " ORDER BY event_id DESC ";
+order_by(_) ->
+    " ORDER BY event_id ASC ".
+
+limit(#{limit := Limit}) ->
+    " LIMIT " ++ integer_to_list(Limit) ++ " ";
+limit(_) ->
     " ".
+
+offset(#{offset := Offset}) ->
+    " OFFSET " ++ integer_to_list(Offset) ++ " ";
+offset(_) ->
+    " ".
+
+%
+%    add_range_direction(
+%        " WHERE event_id > " ++ integer_to_list(Offset) ++
+%        " AND event_id <= " ++ integer_to_list(Offset + Limit) ++ " ",
+%        Range
+%    );
+%create_range_condition(#{offset := Offset} = Range) ->
+%    add_range_direction(
+%        " WHERE event_id > " ++ integer_to_list(Offset) ++ " ",
+%        Range
+%    );
+%create_range_condition(#{limit := Limit} = Range) ->
+%    add_range_direction(
+%        " WHERE event_id <= " ++ integer_to_list(Limit) ++ " ",
+%        Range
+%    );
+%create_range_condition(Range) ->
+%    add_range_direction(" ", Range).
+
+%add_range_direction(Where, #{direction := forward}) ->
+%    Where ++ " ORDER BY event_id ASC ";
+%add_range_direction(Where, #{direction := backward}) ->
+%    Where ++ " ORDER BY event_id DESC ";
+%add_range_direction(Where, _) ->
+%    Where ++ " ORDER BY event_id ASC ".
 
 do_save_process(Connection, Table, Process) ->
     #{
@@ -1192,7 +1244,7 @@ marshal_process(Process) ->
             (<<"status">>, Status, Acc) -> Acc#{status => Status};
             (<<"detail">>, Detail, Acc) -> Acc#{detail => Detail};
             (<<"aux_state">>, AuxState, Acc) -> Acc#{aux_state => AuxState};
-            (<<"p_meta">>, Meta, Acc) -> Acc#{metadata => Meta};
+            (<<"metadata">>, Meta, Acc) -> Acc#{metadata => Meta};
             (<<"corrupted_by">>, CorruptedBy, Acc) -> Acc#{corrupted_by => CorruptedBy};
             (_, _, Acc) -> Acc
         end,

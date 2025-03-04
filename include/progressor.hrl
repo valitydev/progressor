@@ -104,7 +104,8 @@
 
 -type history_range() :: #{
     offset => non_neg_integer(),
-    limit => pos_integer()
+    limit => pos_integer(),
+    direction => forward | backward
 }.
 
 -type process_result() ::
