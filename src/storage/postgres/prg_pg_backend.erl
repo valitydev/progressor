@@ -801,8 +801,6 @@ tables(NsId) ->
 create_range_condition(Range) ->
     order_by(Range) ++ limit(Range) ++ offset(Range).
 
-%range_where(#{direction := backward, limit := Limit, offset := })
-
 order_by(#{direction := backward}) ->
     " ORDER BY event_id DESC ";
 order_by(_) ->
@@ -817,32 +815,6 @@ offset(#{offset := Offset}) ->
     " OFFSET " ++ integer_to_list(Offset) ++ " ";
 offset(_) ->
     " ".
-
-%
-%    add_range_direction(
-%        " WHERE event_id > " ++ integer_to_list(Offset) ++
-%        " AND event_id <= " ++ integer_to_list(Offset + Limit) ++ " ",
-%        Range
-%    );
-%create_range_condition(#{offset := Offset} = Range) ->
-%    add_range_direction(
-%        " WHERE event_id > " ++ integer_to_list(Offset) ++ " ",
-%        Range
-%    );
-%create_range_condition(#{limit := Limit} = Range) ->
-%    add_range_direction(
-%        " WHERE event_id <= " ++ integer_to_list(Limit) ++ " ",
-%        Range
-%    );
-%create_range_condition(Range) ->
-%    add_range_direction(" ", Range).
-
-%add_range_direction(Where, #{direction := forward}) ->
-%    Where ++ " ORDER BY event_id ASC ";
-%add_range_direction(Where, #{direction := backward}) ->
-%    Where ++ " ORDER BY event_id DESC ";
-%add_range_direction(Where, _) ->
-%    Where ++ " ORDER BY event_id ASC ".
 
 do_save_process(Connection, Table, Process) ->
     #{
