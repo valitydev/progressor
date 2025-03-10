@@ -135,7 +135,8 @@ simple_call_with_range_test(_C) ->
     %% steps:
     %% 1. init ->    [event1, event2, event3, event4], timer 2s
     %% 2. call range limit 2 offset 1 ->    [event5], timer 0s
-    %% 3. timeout -> [event6], undefined
+    %% 2. call range limit 2 offset 5 back -> [event6], timer 0s
+    %% 3. timeout -> [event7], undefined
     _ = mock_processor(simple_call_with_range_test),
     Id = gen_id(),
     {ok, ok} = progressor:init(#{ns => ?NS, id => Id, args => <<"init_args">>}),
@@ -149,7 +150,7 @@ simple_call_with_range_test(_C) ->
         ns => ?NS,
         id => Id,
         args => <<"call_args_back">>,
-        range => #{offset => 1, limit => 2, direction => backward}
+        range => #{offset => 5, limit => 2, direction => backward}
     }),
     4 = expect_steps_counter(4),
     {ok, #{
@@ -168,6 +169,8 @@ simple_call_with_range_test(_C) ->
     {ok, #{
         process_id := Id,
         status := <<"running">>,
+        range := #{offset := 6, direction := backward},
+        last_event_id := 7,
         history := [
             #{event_id := 5},
             #{event_id := 4},
@@ -175,7 +178,7 @@ simple_call_with_range_test(_C) ->
             #{event_id := 2},
             #{event_id := 1}
         ]
-    }} = progressor:get(#{ns => ?NS, id => Id, range => #{offset => 2, direction => backward}}),
+    }} = progressor:get(#{ns => ?NS, id => Id, range => #{offset => 6, direction => backward}}),
     unmock_processor(),
     ok.
 %%
@@ -749,7 +752,7 @@ mock_processor(simple_call_with_range_test = TestCase) ->
             Self ! 2,
             {ok, Result};
         ({call, <<"call_args_back">>, #{history := History} = _Process}, _Opts, _Ctx) ->
-            %% call with range limit=2, offset=1 direction=backward
+            %% call with range limit=2, offset=5 direction=backward
             ?assertEqual(2, erlang:length(History)),
             [
                 #{event_id := 4},
