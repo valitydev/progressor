@@ -8,7 +8,9 @@
     aux_state => binary(),
     metadata => map(),
     history => [event()],
-    corrupted_by => task_id()
+    corrupted_by => task_id(),
+    range => history_range(),
+    last_event_id => event_id()
 }.
 
 -type task() :: #{
