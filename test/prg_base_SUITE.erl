@@ -732,15 +732,17 @@ mock_processor(simple_call_test = TestCase) ->
 mock_processor(simple_call_with_range_test = TestCase) ->
     Self = self(),
     MockProcessor = fun
-        ({init, <<"init_args">>, _Process}, _Opts, _Ctx) ->
+        ({init, <<"init_args">>, Process}, _Opts, _Ctx) ->
+            ?assertEqual(0, maps:get(last_event_id, Process)),
             Result = #{
                 events => [event(1), event(2), event(3), event(4)]
             },
             Self ! 1,
             {ok, Result};
-        ({call, <<"call_args">>, #{history := History} = _Process}, _Opts, _Ctx) ->
+        ({call, <<"call_args">>, #{history := History} = Process}, _Opts, _Ctx) ->
             %% call with range limit=2, offset=1
             ?assertEqual(2, erlang:length(History)),
+            ?assertEqual(4, maps:get(last_event_id, Process)),
             [
                 #{event_id := 2},
                 #{event_id := 3}
@@ -751,9 +753,10 @@ mock_processor(simple_call_with_range_test = TestCase) ->
             },
             Self ! 2,
             {ok, Result};
-        ({call, <<"call_args_back">>, #{history := History} = _Process}, _Opts, _Ctx) ->
+        ({call, <<"call_args_back">>, #{history := History} = Process}, _Opts, _Ctx) ->
             %% call with range limit=2, offset=5 direction=backward
             ?assertEqual(2, erlang:length(History)),
+            ?assertEqual(5, maps:get(last_event_id, Process)),
             [
                 #{event_id := 4},
                 #{event_id := 3}
@@ -765,8 +768,9 @@ mock_processor(simple_call_with_range_test = TestCase) ->
             },
             Self ! 3,
             {ok, Result};
-        ({timeout, <<>>, #{history := History} = _Process}, _Opts, _Ctx) ->
+        ({timeout, <<>>, #{history := History} = Process}, _Opts, _Ctx) ->
             ?assertEqual(6, erlang:length(History)),
+            ?assertEqual(6, maps:get(last_event_id, Process)),
             Result = #{
                 events => [event(7)]
             },
