@@ -21,6 +21,8 @@
 
 -record(prg_worker_state, {ns_id, ns_opts, process, sidecar_pid}).
 
+-define(DEFAULT_RANGE, #{direction => forward}).
+
 %%%
 %%% API
 %%%
@@ -141,6 +143,8 @@ do_process_task(
     State1 = maybe_restore_history(Task, State),
     handle_result(Result, TaskHeader, Task, Deadline, State1).
 
+maybe_restore_history(#{metadata := #{range := Range}}, State) when Range =:= ?DEFAULT_RANGE ->
+    State;
 %% if task range is defined then need restore full history for continuation
 maybe_restore_history(
     #{metadata := #{range := Range}},

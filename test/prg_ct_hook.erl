@@ -100,7 +100,8 @@ app_env(epg_connector) ->
                 database => progressor_db,
                 size => 10
             }
-        }}
+        }},
+        {force_garbage_collect, true}
     ];
 app_env(brod) ->
     [
