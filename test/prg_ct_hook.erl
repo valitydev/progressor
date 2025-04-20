@@ -98,7 +98,7 @@ app_env(epg_connector) ->
         {pools, #{
             default_pool => #{
                 database => progressor_db,
-                size => 10
+                size => {1, 2}
             }
         }},
         {force_garbage_collect, true}
