@@ -197,6 +197,7 @@ prepare(
                     ERR
             end;
         {error, _} = Error ->
+            ok = return_worker(NsId, Worker),
             Error
     end.
 
