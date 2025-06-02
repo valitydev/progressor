@@ -118,7 +118,7 @@
         aux_state => binary(),
         metadata => map()
     }}
-    | {error, binary()}.
+    | {error, term()}.
 
 -type action() :: #{set_timer := timestamp_sec(), remove => true} | unset_timer.
 
