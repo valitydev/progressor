@@ -205,7 +205,8 @@ handle_call(
         try Handler:process(Request, Options, Ctx) of
             {ok, _Result} = OK ->
                 OK;
-            {error, _Reason} = ERR ->
+            {error, Reason} = ERR ->
+                logger:error("processor error: ~p", [Reason]),
                 ERR;
             Unsupported ->
                 logger:error("processor unexpected result: ~p", [Unsupported]),
