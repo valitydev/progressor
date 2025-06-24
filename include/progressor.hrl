@@ -110,15 +110,36 @@
     direction => forward | backward
 }.
 
+-type processor_intent() :: #{
+    events := [event()],
+    action => action(),
+    response => term(),
+    aux_state => binary(),
+    metadata => map()
+}.
+-type processor_exception(Reason) :: {exception, _Class, Reason}.
+-type maybe_transient_error_reason() ::
+    processor_exception({woody_error, {_, atom(), _}})
+    | any().
+-type non_transient_error_reason() ::
+    processor_exception({woody_error, {_, result_unexpected, _}})
+    | processor_exception(any()).
 -type process_result() ::
-    {ok, #{
-        events := [event()],
-        action => action(),
-        response => term(),
-        aux_state => binary(),
-        metadata => map()
-    }}
-    | {error, term()}.
+    {ok, processor_intent()}
+    | {error, non_transient_error_reason() | maybe_transient_error_reason()}.
+%% NOTE: There is a crutch in MG-compatibility retry-ability check. See
+%% `prg_worker:is_retryable/5'.
+%%
+%% Erroneous results can be treated as transient errors only during
+%% 'timeout' tasks, with the following caveats:
+%%
+%% - A `processor_exception/1' can be treated as transient only if it is not a
+%%   'result_unexpected' woody error;
+%%
+%% - Other possible errors matching `maybe_transient_error_reason/0'
+%%   are always treated as transient when the retry policy applies
+%%   (i.e., attempts are not exhausted, and the error is not marked as
+%%   non-retryable).
 
 -type action() :: #{set_timer := timestamp_sec(), remove => true} | unset_timer.
 
