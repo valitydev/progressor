@@ -556,30 +556,23 @@ check_retryable(TaskHeader, #{last_retry_interval := LastInterval} = Task, Retry
     end.
 
 %% machinegun legacy
-is_retryable(
-    {exception, _, {woody_error, {_, result_unexpected, _}}} = _Error,
-    _TaskHeader,
-    _RetryPolicy,
-    _Timeout,
-    _Attempts
-) ->
-    false;
-is_retryable(
-    {exception, _, {woody_error, {_, Class, _}}} = Error,
-    {timeout, undefined},
-    RetryPolicy,
-    Timeout,
-    Attempts
-) when Class =:= resource_unavailable orelse Class =:= result_unknown ->
-    Timeout < maps:get(max_timeout, RetryPolicy, infinity) andalso
+-define(WOODY_ERROR(Class), {exception, _, {woody_error, Class, _}}).
+-define(TEST_POLICY(Error, RetryPolicy, Timeout, Attempts),
+    (Timeout < maps:get(max_timeout, RetryPolicy, infinity) andalso
         Attempts < maps:get(max_attempts, RetryPolicy, infinity) andalso
-        not lists:any(fun(E) -> Error =:= E end, maps:get(non_retryable_errors, RetryPolicy, []));
-is_retryable({exception, _, _} = _Error, _TaskHeader, _RetryPolicy, _Timeout, _Attempts) ->
+        not lists:any(fun(E) -> Error =:= E end, maps:get(non_retryable_errors, RetryPolicy, [])))
+).
+
+is_retryable(?WOODY_ERROR(result_unexpected), _TaskHeader, _RetryPolicy, _Timeout, _Attempts) ->
+    false;
+is_retryable(?WOODY_ERROR(resource_unavailable) = Error, {timeout, undefined}, RetryPolicy, Timeout, Attempts) ->
+    ?TEST_POLICY(Error, RetryPolicy, Timeout, Attempts);
+is_retryable(?WOODY_ERROR(result_unknown) = Error, {timeout, undefined}, RetryPolicy, Timeout, Attempts) ->
+    ?TEST_POLICY(Error, RetryPolicy, Timeout, Attempts);
+is_retryable({exception, _, _}, _TaskHeader, _RetryPolicy, _Timeout, _Attempts) ->
     false;
 is_retryable(Error, {timeout, undefined}, RetryPolicy, Timeout, Attempts) ->
-    Timeout < maps:get(max_timeout, RetryPolicy, infinity) andalso
-        Attempts < maps:get(max_attempts, RetryPolicy, infinity) andalso
-        not lists:any(fun(E) -> Error =:= E end, maps:get(non_retryable_errors, RetryPolicy, []));
+    ?TEST_POLICY(Error, RetryPolicy, Timeout, Attempts);
 is_retryable(_Error, _TaskHeader, _RetryPolicy, _Timeout, _Attempts) ->
     false.
 
