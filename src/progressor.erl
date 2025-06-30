@@ -309,11 +309,11 @@ do_health_check(#{ns := NsId, ns_opts := #{storage := StorageOpts}}) ->
         ok ->
             {passing, []};
         {error, Reason} ->
-            Detail = unicode:characters_to_binary(io_lib:format("~64000p", Reason)),
+            Detail = unicode:characters_to_binary(io_lib:format("~64000p", [Reason])),
             {critical, #{progressor_namespace => NsId, error => Detail}}
     catch
         Error:Reason:Stacktrace ->
-            Detail = unicode:characters_to_binary(io_lib:format("~64000p", {Error, Reason, Stacktrace})),
+            Detail = unicode:characters_to_binary(io_lib:format("~64000p", [{Error, Reason, Stacktrace}])),
             {critical, #{progressor_namespace => NsId, error => Detail}}
     end.
 
