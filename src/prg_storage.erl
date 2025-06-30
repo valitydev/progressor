@@ -3,6 +3,7 @@
 -include("progressor.hrl").
 
 %% api handler functions
+-export([health_check/1]).
 -export([get_task_result/3]).
 -export([get_process_status/3]).
 -export([prepare_init/4]).
@@ -39,6 +40,10 @@
 %%%%%%%%%%%%%%%%%%%%%%%%
 %% API handler functions
 %%%%%%%%%%%%%%%%%%%%%%%%
+
+-spec health_check(storage_opts()) -> ok | {error, Reason :: term()} | no_return().
+health_check(#{client := Handler, options := HandlerOpts}) ->
+    Handler:health_check(HandlerOpts).
 
 -spec get_task_result(storage_opts(), namespace_id(), {task_id | idempotency_key, binary()}) ->
     {ok, term()} | {error, _Reason}.

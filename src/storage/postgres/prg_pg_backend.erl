@@ -6,6 +6,7 @@
 %% API
 
 %% api handler functions
+-export([health_check/1]).
 -export([get_task_result/3]).
 -export([get_process_status/3]).
 -export([prepare_init/4]).
@@ -38,6 +39,16 @@
 
 %% second
 -define(PROTECT_TIMEOUT, 5).
+
+-spec health_check(pg_opts()) -> ok | {error, Reason :: term()} | no_return().
+health_check(PgOpts) ->
+    Pool = get_pool(internal, PgOpts),
+    case epg_pool:query(Pool, "SELECT 1") of
+        {ok, _, _} ->
+            ok;
+        {error, _} = Error ->
+            Error
+    end.
 
 -spec get_task_result(pg_opts(), namespace_id(), {task_id | idempotency_key, binary()}) ->
     {ok, term()} | {error, _Reason}.
