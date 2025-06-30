@@ -12,6 +12,7 @@
 -export([simple_repair/1]).
 -export([get/1]).
 -export([put/1]).
+-export([health_check/1]).
 %% TODO
 %% -export([remove/1]).
 
@@ -110,6 +111,27 @@ put(Req) ->
             fun do_put/1
         ],
         Req
+    ).
+
+%% Details term must be json compatible for jsx encode/decode
+-spec health_check([namespace_id()]) -> {Status :: passing | critical, Details :: term()}.
+health_check(Namespaces) ->
+    health_check(Namespaces, {passing, []}).
+
+health_check([], Result) ->
+    Result;
+health_check([NsId | Tail], {passing, _}) ->
+    health_check(Tail, health_check_namespace(NsId));
+health_check(_Namespaces, Result) ->
+    Result.
+
+health_check_namespace(NsId) ->
+    prg_utils:pipe(
+        [
+            fun add_ns_opts/1,
+            fun do_health_check/1
+        ],
+        #{ns => NsId}
     ).
 
 %-ifdef(TEST).
@@ -281,6 +303,19 @@ do_put(
     ProcessData0 = #{process => Process, init_task => InitTask},
     ProcessData = maybe_add_key(ActiveTask, active_task, ProcessData0),
     prg_storage:put_process_data(StorageOpts, NsId, Id, ProcessData).
+
+do_health_check(#{ns := NsId, ns_opts := #{storage := StorageOpts}}) ->
+    try prg_storage:health_check(StorageOpts) of
+        ok ->
+            {passing, []};
+        {error, Reason} ->
+            Detail = unicode:characters_to_binary(io_lib:format("~64000p", Reason)),
+            {critical, #{progressor_namespace => NsId, error => Detail}}
+    catch
+        Error:Reason:Stacktrace ->
+            Detail = unicode:characters_to_binary(io_lib:format("~64000p", {Error, Reason, Stacktrace})),
+            {critical, #{progressor_namespace => NsId, error => Detail}}
+    end.
 
 process_call(#{ns_opts := NsOpts, ns := NsId, type := Type, task := Task, worker := Worker}) ->
     TimeoutSec = maps:get(process_step_timeout, NsOpts, ?DEFAULT_STEP_TIMEOUT_SEC),
