@@ -16,6 +16,7 @@ _build
 /.image.*
 .idea
 *.iml
+.image.dev
 rebar3.crashdump
 *~
 benchmark/base_bench/rebar.lock

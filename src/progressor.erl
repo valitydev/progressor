@@ -154,11 +154,10 @@ cleanup_storage(#{ns := NsId, ns_opts := #{storage := StorageOpts}}) ->
 %% Internal functions
 
 add_ns_opts(#{ns := NsId} = Opts) ->
-    NSs = application:get_env(progressor, namespaces, #{}),
-    case maps:get(NsId, NSs, undefined) of
-        undefined ->
+    case prg_manager:get_namespace(NsId) of
+        {error, notfound} ->
             {error, <<"namespace not found">>};
-        NsOpts ->
+        {ok, NsOpts} ->
             Opts#{ns_opts => prg_utils:make_ns_opts(NsId, NsOpts)}
     end.
 
