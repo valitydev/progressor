@@ -751,7 +751,31 @@ db_init(#{pool := Pool}, NsId) ->
             {ok, _, _} = epg_pool:query(
                 Connection,
                 "CREATE INDEX IF NOT EXISTS task_idx on " ++ RunningTable ++ " USING HASH (task_id)"
-            )
+            ),
+
+            %% MIGRATIONS
+            %% migrate process_id to varchar 256
+            ok = lists:foreach(
+                fun(T) ->
+                    TableStr = table_name_to_string(T),
+                    {ok, _, [{VarSize}]} = epg_pool:query(
+                        Connection,
+                        "SELECT character_maximum_length FROM information_schema.columns "
+                        "WHERE table_name = " ++ TableStr ++ " AND column_name = 'process_id'"
+                    ),
+                    case VarSize < 256 of
+                        true ->
+                            {ok, _, _} = epg_pool:query(
+                                Connection,
+                                "ALTER TABLE " ++ T ++ "ALTER COLUMN process_id TYPE VARCHAR(256)"
+                            );
+                        false ->
+                            skip
+                    end
+                end,
+                [ProcessesTable, TaskTable, ScheduleTable, RunningTable, EventsTable]
+            ),
+            {ok, [], []}
         end
     ),
     ok.
@@ -787,6 +811,9 @@ cleanup(#{pool := Pool}, NsId) ->
 
 construct_table_name(NsId, Postfix) ->
     "\"" ++ erlang:atom_to_list(NsId) ++ Postfix ++ "\"".
+
+table_name_to_string(TableName) ->
+    string:replace(TableName, "\"", "'", all).
 
 tables(NsId) ->
     #{
