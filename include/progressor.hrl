@@ -69,8 +69,10 @@
 
 -type storage_opts() :: #{
     client := storage_handler(),
-    options => term()
+    options => storage_handler_opts()
 }.
+
+-type storage_handler_opts() :: term().
 
 -type retry_policy() :: #{
     initial_timeout => timeout_sec(),

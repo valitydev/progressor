@@ -81,8 +81,25 @@ app_env(progressor) ->
                         lifecycle_topic => ?LIFECYCLE_TOPIC
                     }
                 }
+            },
+            'cached/namespace' => #{
+                storage => #{
+                    client => prg_pg_backend,
+                    options => #{
+                        pool => default_pool,
+                        cache => progressor_db
+                    }
+                },
+                processor => #{
+                    client => prg_ct_processor,
+                    options => #{}
+                }
             }
-        }}
+        }},
+
+        {post_init_hooks, [
+            {prg_pg_cache, start, [#{progressor_db => {['cached/namespace'], "progressor"}}]}
+        ]}
     ];
 app_env(epg_connector) ->
     [

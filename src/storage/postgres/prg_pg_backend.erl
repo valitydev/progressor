@@ -35,7 +35,14 @@
 
 -export([cleanup/2]).
 
--type pg_opts() :: #{pool := atom()}.
+-type pg_opts() :: #{
+    pool := atom(),
+    front_pool => atom(),
+    scan_pool => atom(),
+    cache => DbRef :: atom()
+}.
+
+-export_type([pg_opts/0]).
 
 %% second
 -define(PROTECT_TIMEOUT, 5).
@@ -54,7 +61,9 @@ health_check(PgOpts) ->
     {ok, term()} | {error, _Reason}.
 get_task_result(PgOpts, NsId, KeyOrId) ->
     Pool = get_pool(external, PgOpts),
-    TaskTable = construct_table_name(NsId, "_tasks"),
+    #{
+        tasks := TaskTable
+    } = prg_pg_utils:tables(NsId),
     case do_get_task_result(Pool, TaskTable, KeyOrId) of
         {ok, _, []} ->
             {error, not_found};
@@ -67,7 +76,9 @@ get_task_result(PgOpts, NsId, KeyOrId) ->
 -spec get_task(recipient(), pg_opts(), namespace_id(), task_id()) -> {ok, task()} | {error, _Reason}.
 get_task(Recipient, PgOpts, NsId, TaskId) ->
     Pool = get_pool(Recipient, PgOpts),
-    TaskTable = construct_table_name(NsId, "_tasks"),
+    #{
+        tasks := TaskTable
+    } = prg_pg_utils:tables(NsId),
     case do_get_task(Pool, TaskTable, TaskId) of
         {ok, _, []} ->
             {error, not_found};
@@ -79,7 +90,9 @@ get_task(Recipient, PgOpts, NsId, TaskId) ->
 -spec get_process_status(pg_opts(), namespace_id(), id()) -> term().
 get_process_status(PgOpts, NsId, Id) ->
     Pool = get_pool(external, PgOpts),
-    Table = construct_table_name(NsId, "_processes"),
+    #{
+        processes := Table
+    } = prg_pg_utils:tables(NsId),
     {ok, _Columns, Rows} = epg_pool:query(
         Pool,
         "SELECT status from " ++ Table ++ " WHERE process_id = $1",
@@ -92,12 +105,19 @@ get_process_status(PgOpts, NsId, Id) ->
 
 -spec get_process(recipient(), pg_opts(), namespace_id(), id(), history_range()) ->
     {ok, process()} | {error, _Reason}.
+get_process(external = Recipient, #{cache := _DbRef} = PgOpts, NsId, ProcessId, HistoryRange) ->
+    case prg_pg_cache:get(NsId, ProcessId, HistoryRange) of
+        undefined ->
+            get_process(Recipient, maps:without([cache], PgOpts), NsId, ProcessId, HistoryRange);
+        {ok, _} = Response ->
+            Response
+    end;
 get_process(Recipient, PgOpts, NsId, ProcessId, HistoryRange) ->
     Pool = get_pool(Recipient, PgOpts),
     #{
         processes := ProcessesTable,
         events := EventsTable
-    } = tables(NsId),
+    } = prg_pg_utils:tables(NsId),
     RangeCondition = create_range_condition(HistoryRange),
     RawResult = epg_pool:transaction(
         Pool,
@@ -145,7 +165,7 @@ put_process_data(PgOpts, NsId, ProcessId, ProcessData) ->
         tasks := TaskTable,
         schedule := ScheduleTable,
         events := EventsTable
-    } = tables(NsId),
+    } = prg_pg_utils:tables(NsId),
     epg_pool:transaction(
         Pool,
         fun(Connection) ->
@@ -175,7 +195,7 @@ remove_process(PgOpts, NsId, ProcessId) ->
         schedule := ScheduleTable,
         running := RunningTable,
         events := EventsTable
-    } = tables(NsId),
+    } = prg_pg_utils:tables(NsId),
     epg_pool:transaction(
         Pool,
         fun(Connection) ->
@@ -199,7 +219,7 @@ collect_zombies(PgOpts, NsId, Timeout) ->
         processes := ProcessesTable,
         tasks := TaskTable,
         running := RunningTable
-    } = tables(NsId),
+    } = prg_pg_utils:tables(NsId),
     NowSec = erlang:system_time(second),
     Now = unixtime_to_datetime(NowSec),
     TsBackward = unixtime_to_datetime(NowSec - (Timeout + ?PROTECT_TIMEOUT)),
@@ -235,7 +255,7 @@ search_timers(PgOpts, NsId, _Timeout, Limit) ->
     #{
         schedule := ScheduleTable,
         running := RunningTable
-    } = tables(NsId),
+    } = prg_pg_utils:tables(NsId),
     NowSec = erlang:system_time(second),
     Now = unixtime_to_datetime(NowSec),
     NowText = unixtime_to_text(NowSec),
@@ -275,7 +295,7 @@ search_calls(PgOpts, NsId, Limit) ->
     #{
         schedule := ScheduleTable,
         running := RunningTable
-    } = tables(NsId),
+    } = prg_pg_utils:tables(NsId),
     NowSec = erlang:system_time(second),
     Now = unixtime_to_text(NowSec),
     {ok, _, Columns, Rows} = epg_pool:transaction(
@@ -315,7 +335,7 @@ prepare_init(PgOpts, NsId, Process, Task) ->
         tasks := TaskTable,
         schedule := ScheduleTable,
         running := RunningTable
-    } = tables(NsId),
+    } = prg_pg_utils:tables(NsId),
     epg_pool:transaction(
         Pool,
         fun(Connection) ->
@@ -343,7 +363,7 @@ prepare_call(PgOpts, NsId, ProcessId, #{status := <<"waiting">>} = Task) ->
     #{
         tasks := TaskTable,
         schedule := ScheduleTable
-    } = tables(NsId),
+    } = prg_pg_utils:tables(NsId),
     epg_pool:transaction(
         Pool,
         fun(C) ->
@@ -359,7 +379,7 @@ prepare_call(PgOpts, NsId, ProcessId, #{status := <<"running">>} = Task) ->
         tasks := TaskTable,
         schedule := ScheduleTable,
         running := RunningTable
-    } = tables(NsId),
+    } = prg_pg_utils:tables(NsId),
     epg_pool:transaction(
         Pool,
         fun(C) ->
@@ -383,7 +403,7 @@ prepare_repair(PgOpts, NsId, _ProcessId, #{status := <<"waiting">>} = Task) ->
     #{
         tasks := TaskTable,
         schedule := ScheduleTable
-    } = tables(NsId),
+    } = prg_pg_utils:tables(NsId),
     epg_pool:transaction(
         Pool,
         fun(C) ->
@@ -397,7 +417,7 @@ prepare_repair(PgOpts, NsId, _ProcessId, #{status := <<"running">>} = Task) ->
     #{
         tasks := TaskTable,
         running := RunningTable
-    } = tables(NsId),
+    } = prg_pg_utils:tables(NsId),
     epg_pool:transaction(
         Pool,
         fun(C) ->
@@ -425,7 +445,7 @@ complete_and_continue(PgOpts, NsId, TaskResult, Process, Events, NextTask) ->
         schedule := ScheduleTable,
         running := RunningTable,
         events := EventsTable
-    } = tables(NsId),
+    } = prg_pg_utils:tables(NsId),
     #{task_id := TaskId} = TaskResult,
     #{process_id := ProcessId} = Process,
     {ok, _, Columns, Rows} = epg_pool:transaction(
@@ -488,7 +508,7 @@ complete_and_suspend(PgOpts, NsId, TaskResult, Process, Events) ->
         schedule := ScheduleTable,
         running := RunningTable,
         events := EventsTable
-    } = tables(NsId),
+    } = prg_pg_utils:tables(NsId),
     #{task_id := TaskId} = TaskResult,
     #{process_id := ProcessId} = Process,
     {ok, _, Columns, Rows} = epg_pool:transaction(
@@ -515,7 +535,7 @@ complete_and_error(PgOpts, NsId, TaskResult, Process) ->
         tasks := TaskTable,
         schedule := ScheduleTable,
         running := RunningTable
-    } = tables(NsId),
+    } = prg_pg_utils:tables(NsId),
     #{process_id := ProcessId} = Process,
     epg_pool:transaction(
         Pool,
@@ -545,7 +565,7 @@ complete_and_unlock(PgOpts, NsId, TaskResult, Process, Events) ->
         schedule := ScheduleTable,
         running := RunningTable,
         events := EventsTable
-    } = tables(NsId),
+    } = prg_pg_utils:tables(NsId),
     #{task_id := TaskId} = TaskResult,
     #{process_id := ProcessId} = Process,
     {ok, _, Columns, Rows} = epg_pool:transaction(
@@ -579,250 +599,18 @@ complete_and_unlock(PgOpts, NsId, TaskResult, Process, Events) ->
     {ok, to_maps(Columns, Rows, fun marshal_task/1)}.
 
 -spec db_init(pg_opts(), namespace_id()) -> ok.
-db_init(#{pool := Pool}, NsId) ->
-    #{
-        processes := ProcessesTable,
-        tasks := TaskTable,
-        schedule := ScheduleTable,
-        running := RunningTable,
-        events := EventsTable
-    } = tables(NsId),
-    {ok, _, _} = epg_pool:transaction(
-        Pool,
-        fun(Connection) ->
-            %% create type process_status if not exists
-            {ok, _, [{IsProcessStatusExists}]} = epg_pool:query(
-                Connection,
-                "select exists (select 1 from pg_type where typname = 'process_status')"
-            ),
-            _ =
-                case IsProcessStatusExists of
-                    true ->
-                        ok;
-                    false ->
-                        {ok, _, _} = epg_pool:query(
-                            Connection,
-                            "CREATE TYPE process_status AS ENUM ('running', 'error')"
-                        )
-                end,
-            %% create type task_status if not exists
-            {ok, _, [{IsTaskStatusExists}]} = epg_pool:query(
-                Connection,
-                "select exists (select 1 from pg_type where typname = 'task_status')"
-            ),
-            _ =
-                case IsTaskStatusExists of
-                    true ->
-                        ok;
-                    false ->
-                        {ok, _, _} = epg_pool:query(
-                            Connection,
-                            "CREATE TYPE task_status AS ENUM "
-                            "('waiting', 'running', 'blocked', 'error', 'finished', 'cancelled')"
-                        )
-                end,
-            %% create type task_type if not exists
-            {ok, _, [{IsTaskTypeExists}]} = epg_pool:query(
-                Connection,
-                "select exists (select 1 from pg_type where typname = 'task_type')"
-            ),
-            _ =
-                case IsTaskTypeExists of
-                    true ->
-                        ok;
-                    false ->
-                        {ok, _, _} = epg_pool:query(
-                            Connection,
-                            "CREATE TYPE task_type AS ENUM ('init', 'timeout', 'call', 'notify', 'repair', 'remove')"
-                        )
-                end,
-            %% create processes table
-            {ok, _, _} = epg_pool:query(
-                Connection,
-                "CREATE TABLE IF NOT EXISTS " ++ ProcessesTable ++
-                    " ("
-                    "process_id VARCHAR(80) PRIMARY KEY, "
-                    "status process_status NOT NULL, "
-                    "detail TEXT, "
-                    "aux_state BYTEA, "
-                    "created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(), "
-                    "metadata JSONB)"
-            ),
-            %% create tasks table
-            {ok, _, _} = epg_pool:query(
-                Connection,
-                "CREATE TABLE IF NOT EXISTS " ++ TaskTable ++
-                    " ("
-                    "task_id BIGSERIAL PRIMARY KEY, "
-                    "process_id VARCHAR(80) NOT NULL, "
-                    "task_type task_type NOT NULL, "
-                    "status task_status NOT NULL, "
-                    "scheduled_time TIMESTAMP WITH TIME ZONE NOT NULL, "
-                    "running_time TIMESTAMP WITH TIME ZONE, "
-                    "finished_time TIMESTAMP WITH TIME ZONE, "
-                    "args BYTEA, "
-                    "metadata JSONB, "
-                    "idempotency_key VARCHAR(80) UNIQUE, "
-                    "response BYTEA, "
-                    "blocked_task BIGINT REFERENCES " ++ TaskTable ++
-                    " (task_id), "
-                    "last_retry_interval INTEGER NOT NULL, "
-                    "attempts_count SMALLINT NOT NULL, "
-                    "context BYTEA, "
-                    "FOREIGN KEY (process_id) REFERENCES " ++ ProcessesTable ++ " (process_id))"
-            ),
-            %% create constraint for process error cause
-            {ok, _, _} = epg_pool:query(
-                Connection,
-                "ALTER TABLE " ++ ProcessesTable ++
-                    " ADD COLUMN IF NOT EXISTS corrupted_by BIGINT REFERENCES " ++ TaskTable ++ "(task_id)"
-            ),
-
-            %% create schedule table
-            {ok, _, _} = epg_pool:query(
-                Connection,
-                "CREATE TABLE IF NOT EXISTS " ++ ScheduleTable ++
-                    " ("
-                    "task_id BIGINT PRIMARY KEY, "
-                    "process_id VARCHAR(80) NOT NULL, "
-                    "task_type task_type NOT NULL, "
-                    "status task_status NOT NULL, "
-                    "scheduled_time TIMESTAMP WITH TIME ZONE NOT NULL, "
-                    "args BYTEA, "
-                    "metadata JSONB, "
-                    "last_retry_interval INTEGER NOT NULL, "
-                    "attempts_count SMALLINT NOT NULL, "
-                    "context BYTEA, "
-                    "FOREIGN KEY (process_id) REFERENCES " ++ ProcessesTable ++
-                    " (process_id), "
-                    "FOREIGN KEY (task_id) REFERENCES " ++ TaskTable ++ " (task_id))"
-            ),
-
-            %% create running table
-            {ok, _, _} = epg_pool:query(
-                Connection,
-                "CREATE TABLE IF NOT EXISTS " ++ RunningTable ++
-                    " ("
-                    "process_id VARCHAR(80) PRIMARY KEY, "
-                    "task_id BIGINT NOT NULL, "
-                    "task_type task_type NOT NULL, "
-                    "status task_status NOT NULL, "
-                    "scheduled_time TIMESTAMP WITH TIME ZONE NOT NULL, "
-                    "running_time TIMESTAMP WITH TIME ZONE NOT NULL, "
-                    "args BYTEA, "
-                    "metadata JSONB, "
-                    "last_retry_interval INTEGER NOT NULL, "
-                    "attempts_count SMALLINT NOT NULL, "
-                    "context BYTEA, "
-                    "FOREIGN KEY (process_id) REFERENCES " ++ ProcessesTable ++
-                    " (process_id), "
-                    "FOREIGN KEY (task_id) REFERENCES " ++ TaskTable ++ " (task_id))"
-            ),
-
-            %% create events table
-            {ok, _, _} = epg_pool:query(
-                Connection,
-                "CREATE TABLE IF NOT EXISTS " ++ EventsTable ++
-                    " ("
-                    "process_id VARCHAR(80) NOT NULL, "
-                    "task_id BIGINT NOT NULL, "
-                    "event_id SMALLINT NOT NULL, "
-                    "timestamp TIMESTAMP WITH TIME ZONE DEFAULT NOW(), "
-                    "metadata JSONB, "
-                    "payload BYTEA NOT NULL, "
-                    "PRIMARY KEY (process_id, event_id), "
-                    "FOREIGN KEY (process_id) REFERENCES " ++ ProcessesTable ++
-                    " (process_id), "
-                    "FOREIGN KEY (task_id) REFERENCES " ++ TaskTable ++ " (task_id))"
-            ),
-            %% create indexes
-            {ok, _, _} = epg_pool:query(
-                Connection,
-                "CREATE INDEX IF NOT EXISTS process_idx on " ++ EventsTable ++ " USING HASH (process_id)"
-            ),
-            {ok, _, _} = epg_pool:query(
-                Connection,
-                "CREATE INDEX IF NOT EXISTS process_idx on " ++ TaskTable ++ " USING HASH (process_id)"
-            ),
-            {ok, _, _} = epg_pool:query(
-                Connection,
-                "CREATE INDEX IF NOT EXISTS process_idx on " ++ ScheduleTable ++ " USING HASH (process_id)"
-            ),
-            {ok, _, _} = epg_pool:query(
-                Connection,
-                "CREATE INDEX IF NOT EXISTS task_idx on " ++ RunningTable ++ " USING HASH (task_id)"
-            ),
-
-            %% MIGRATIONS
-            %% migrate process_id to varchar 256
-            ok = lists:foreach(
-                fun(T) ->
-                    TableStr = table_name_to_string(T),
-                    {ok, _, [{VarSize}]} = epg_pool:query(
-                        Connection,
-                        "SELECT character_maximum_length FROM information_schema.columns "
-                        "WHERE table_name = " ++ TableStr ++ " AND column_name = 'process_id'"
-                    ),
-                    case VarSize < 256 of
-                        true ->
-                            {ok, _, _} = epg_pool:query(
-                                Connection,
-                                "ALTER TABLE " ++ T ++ "ALTER COLUMN process_id TYPE VARCHAR(256)"
-                            );
-                        false ->
-                            skip
-                    end
-                end,
-                [ProcessesTable, TaskTable, ScheduleTable, RunningTable, EventsTable]
-            ),
-            {ok, [], []}
-        end
-    ),
-    ok.
+db_init(PgOpts, NsId) ->
+    prg_pg_migration:db_init(PgOpts, NsId).
 
 %-ifdef(TEST).
 
 -spec cleanup(_, _) -> _.
-cleanup(#{pool := Pool}, NsId) ->
-    #{
-        processes := ProcessesTable,
-        tasks := TaskTable,
-        schedule := ScheduleTable,
-        running := RunningTable,
-        events := EventsTable
-    } = tables(NsId),
-    epg_pool:transaction(
-        Pool,
-        fun(Connection) ->
-            {ok, _, _} = epg_pool:query(Connection, "ALTER TABLE " ++ ProcessesTable ++ " DROP COLUMN corrupted_by"),
-            {ok, _, _} = epg_pool:query(Connection, "DROP TABLE " ++ EventsTable),
-            {ok, _, _} = epg_pool:query(Connection, "DROP TABLE " ++ RunningTable),
-            {ok, _, _} = epg_pool:query(Connection, "DROP TABLE " ++ ScheduleTable),
-            {ok, _, _} = epg_pool:query(Connection, "DROP TABLE " ++ TaskTable),
-            {ok, _, _} = epg_pool:query(Connection, "DROP TABLE " ++ ProcessesTable),
-            _ = epg_pool:query(Connection, "DROP TYPE task_type, task_status, process_status")
-        end
-    ),
-    ok.
+cleanup(PgOpts, NsId) ->
+    prg_pg_migration:cleanup(PgOpts, NsId).
 
 %-endif.
 
 %% Internal functions
-
-construct_table_name(NsId, Postfix) ->
-    "\"" ++ erlang:atom_to_list(NsId) ++ Postfix ++ "\"".
-
-table_name_to_string(TableName) ->
-    string:replace(TableName, "\"", "'", all).
-
-tables(NsId) ->
-    #{
-        processes => construct_table_name(NsId, "_processes"),
-        tasks => construct_table_name(NsId, "_tasks"),
-        schedule => construct_table_name(NsId, "_schedule"),
-        running => construct_table_name(NsId, "_running"),
-        events => construct_table_name(NsId, "_events")
-    }.
 
 create_range_condition(Range) ->
     after_id(Range) ++ direction(Range) ++ limit(Range).
