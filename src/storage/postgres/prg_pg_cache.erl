@@ -108,7 +108,9 @@ handle_cast({handle_replication_data, ReplData}, State) ->
     NewState = lists:foldl(
         fun(ReplUnit, Acc) -> process_operation(ReplUnit, Acc) end,
         State,
-        ReplData
+        %% NOTE transaction as stack (first operation -> last element)
+        %% need check
+        lists:reverse(ReplData)
     ),
     {noreply, NewState};
 handle_cast({handle_replication_stop, _ReplStop}, State) ->
@@ -136,7 +138,7 @@ handle_info({timeout, _TRef, restart_replication}, State) ->
             erlang:start_timer(ReconnectTimeout, self(), restart_replication),
             {noreply, State}
     end;
-handle_info({timeout, _TRef, {cleanup_process, ProcessID}}, #{timers := Timers, tables := Tables} = State) ->
+handle_info({timeout, _TRef, {cleanup_process, ProcessID, Tables}}, #{timers := Timers} = State) ->
     lists:foreach(
         fun(T) -> ets:delete(T, ProcessID) end,
         Tables
@@ -236,36 +238,64 @@ do_get(NsID, ProcessID, HistoryRange) ->
             {ok, Process#{history => Events, last_event_id => LastEventID, range => HistoryRange}}
     end.
 
-process_operation({Table, insert, #{<<"process_id">> := ProcessID} = Row}, State) ->
-    TableETS = binary_to_atom(Table),
-    true = ets:insert(TableETS, {ProcessID, Row}),
-    reset_timer(ProcessID, State);
-process_operation({Table, update, #{<<"process_id">> := ProcessID} = Row}, State) ->
+process_operation({Table, _, _} = ReplData, State) ->
+    [NsBin, Object] = string:split(Table, <<"_">>, trailing),
+    process_operation(Object, binary_to_atom(NsBin), ReplData, State).
+
+process_operation(<<"processes">>, NsID, {_Table, insert, #{<<"process_id">> := ProcessID} = Row}, State) ->
+    %% process created
+    #{
+        processes := ProcessesTable,
+        events := EventsTable
+    } = tables(NsID),
+    true = ets:insert(ProcessesTable, {ProcessID, Row}),
+    reset_timer([ProcessesTable, EventsTable], ProcessID, State);
+process_operation(<<"events">>, NsID, {_Table, insert, #{<<"process_id">> := ProcessID} = Row}, State) ->
+    #{
+        processes := ProcessesTable,
+        events := EventsTable
+    } = tables(NsID),
+    case ets:lookup(ProcessesTable, ProcessID) of
+        [_Process] ->
+            %% known cached process, save events
+            true = ets:insert(EventsTable, {ProcessID, Row}),
+            reset_timer([ProcessesTable, EventsTable], ProcessID, State);
+        [] ->
+            %% old process, not cached, ignore
+            State
+    end;
+process_operation(_, NsID, {Table, update, #{<<"process_id">> := ProcessID} = Row}, State) ->
     TableETS = binary_to_atom(Table),
     case ets:lookup(TableETS, ProcessID) of
         [{_, OldRow}] ->
-            true = ets:insert(TableETS, {ProcessID, maps:merge(OldRow, Row)});
+            #{
+                processes := ProcessesTable,
+                events := EventsTable
+            } = tables(NsID),
+            true = ets:insert(TableETS, {ProcessID, maps:merge(OldRow, Row)}),
+            reset_timer([ProcessesTable, EventsTable], ProcessID, State);
         [] ->
-            ets:insert(TableETS, {ProcessID, Row})
-    end,
-    reset_timer(ProcessID, State);
-process_operation({Table, delete, #{<<"process_id">> := ProcessID}}, State) ->
+            State
+    end;
+process_operation(_Object, _NsID, {Table, delete, #{<<"process_id">> := ProcessID}}, State) ->
     TableETS = binary_to_atom(Table),
     true = ets:delete(TableETS, ProcessID),
     State;
-process_operation(ReplData, State) ->
-    logger:warning("Unsupperted cache operation: ~p", [ReplData]),
+process_operation(_Object, _NsID, ReplData, State) ->
+    logger:warning("Unsupported cache operation: ~p", [ReplData]),
     State.
 
-reset_timer(ProcessID, #{timers := Timers} = State) when is_map_key(ProcessID, Timers) ->
+reset_timer(Tables, ProcessID, #{timers := Timers} = State) when is_map_key(ProcessID, Timers) ->
     TRef = maps:get(ProcessID, Timers),
     _ = erlang:cancel_timer(TRef),
     CleanupTimeout = application:get_env(progressor, cache_cleanup_timeout, ?DEFAULT_CLEANUP_TIMEOUT),
-    NewTRef = erlang:start_timer(CleanupTimeout, self(), {cleanup_process, ProcessID}),
+    Msg = {cleanup_process, ProcessID, Tables},
+    NewTRef = erlang:start_timer(CleanupTimeout, self(), Msg),
     State#{timers => Timers#{ProcessID => NewTRef}};
-reset_timer(ProcessID, #{timers := Timers} = State) ->
+reset_timer(Tables, ProcessID, #{timers := Timers} = State) ->
     CleanupTimeout = application:get_env(progressor, cache_cleanup_timeout, ?DEFAULT_CLEANUP_TIMEOUT),
-    TRef = erlang:start_timer(CleanupTimeout, self(), {cleanup_process, ProcessID}),
+    Msg = {cleanup_process, ProcessID, Tables},
+    TRef = erlang:start_timer(CleanupTimeout, self(), Msg),
     State#{timers => Timers#{ProcessID => TRef}}.
 
 tables(NsID) ->
