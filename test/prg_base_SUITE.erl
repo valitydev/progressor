@@ -6,7 +6,10 @@
 -export([
     init_per_suite/1,
     end_per_suite/1,
-    all/0
+    init_per_group/2,
+    end_per_group/2,
+    all/0,
+    groups/0
 ]).
 
 %% Tests
@@ -28,7 +31,8 @@
 -export([put_process_with_timeout_test/1]).
 -export([put_process_with_remove_test/1]).
 
--define(NS, 'default/default').
+-define(NS(C), proplists:get_value(ns_id, C, 'default/default')).
+-define(AWAIT_TIMEOUT(C), proplists:get_value(repl_timeout, C, 0)).
 
 init_per_suite(Config) ->
     Config.
@@ -36,29 +40,48 @@ init_per_suite(Config) ->
 end_per_suite(_Config) ->
     ok.
 
+init_per_group(cache, C) ->
+    [{ns_id, 'cached/namespace'}, {repl_timeout, 50} | C];
+init_per_group(_, C) ->
+    C.
+
+end_per_group(_, _) ->
+    ok.
+
 all() ->
     [
-        simple_timers_test,
-        simple_call_test,
-        simple_call_with_range_test,
-        call_replace_timer_test,
-        call_unset_timer_test,
-        postponed_call_test,
-        postponed_call_to_suspended_process_test,
-        multiple_calls_test,
-        simple_repair_after_non_retriable_error_test,
-        repair_after_non_retriable_error_test,
-        error_after_max_retries_test,
-        repair_after_call_error_test,
-        remove_by_timer_test,
-        remove_without_timer_test,
-        put_process_test,
-        put_process_with_timeout_test,
-        put_process_with_remove_test
+        {group, base},
+        {group, cache}
+    ].
+
+groups() ->
+    [
+        {base, [], [
+            simple_timers_test,
+            simple_call_test,
+            simple_call_with_range_test,
+            call_replace_timer_test,
+            call_unset_timer_test,
+            postponed_call_test,
+            postponed_call_to_suspended_process_test,
+            multiple_calls_test,
+            simple_repair_after_non_retriable_error_test,
+            repair_after_non_retriable_error_test,
+            error_after_max_retries_test,
+            repair_after_call_error_test,
+            remove_by_timer_test,
+            remove_without_timer_test,
+            put_process_test,
+            put_process_with_timeout_test,
+            put_process_with_remove_test
+        ]},
+        {cache, [], [
+            {group, base}
+        ]}
     ].
 
 -spec simple_timers_test(_) -> _.
-simple_timers_test(_C) ->
+simple_timers_test(C) ->
     %% steps:
     %%    step       aux_state   events    action
     %% 1. init ->    aux_state1, [event1], timer 2s
@@ -66,9 +89,10 @@ simple_timers_test(_C) ->
     %% 3. timeout -> undefined,  [],       undefined
     _ = mock_processor(simple_timers_test),
     Id = gen_id(),
-    {ok, ok} = progressor:init(#{ns => ?NS, id => Id, args => <<"init_args">>}),
+    {ok, ok} = progressor:init(#{ns => ?NS(C), id => Id, args => <<"init_args">>}),
     3 = expect_steps_counter(3),
     ExpectedAux = erlang:term_to_binary(<<"aux_state2">>),
+    timer:sleep(?AWAIT_TIMEOUT(C)),
     {ok, #{
         process_id := Id,
         status := <<"running">>,
@@ -88,21 +112,22 @@ simple_timers_test(_C) ->
                 timestamp := _Ts2
             }
         ]
-    }} = progressor:get(#{ns => ?NS, id => Id}),
+    }} = progressor:get(#{ns => ?NS(C), id => Id}),
     unmock_processor(),
     ok.
 %%
 -spec simple_call_test(_) -> _.
-simple_call_test(_C) ->
+simple_call_test(C) ->
     %% steps:
     %% 1. init ->    [event1], timer 2s
     %% 2. call ->    [event2], undefined (duration 3s)
     %% 3. timeout -> [event3], undefined
     _ = mock_processor(simple_call_test),
     Id = gen_id(),
-    {ok, ok} = progressor:init(#{ns => ?NS, id => Id, args => <<"init_args">>}),
-    {ok, <<"response">>} = progressor:call(#{ns => ?NS, id => Id, args => <<"call_args">>}),
+    {ok, ok} = progressor:init(#{ns => ?NS(C), id => Id, args => <<"init_args">>}),
+    {ok, <<"response">>} = progressor:call(#{ns => ?NS(C), id => Id, args => <<"call_args">>}),
     3 = expect_steps_counter(3),
+    timer:sleep(?AWAIT_TIMEOUT(C)),
     {ok, #{
         process_id := Id,
         status := <<"running">>,
@@ -126,12 +151,12 @@ simple_call_test(_C) ->
                 timestamp := _Ts3
             }
         ]
-    }} = progressor:get(#{ns => ?NS, id => Id}),
+    }} = progressor:get(#{ns => ?NS(C), id => Id}),
     unmock_processor(),
     ok.
 %%
 -spec simple_call_with_range_test(_) -> _.
-simple_call_with_range_test(_C) ->
+simple_call_with_range_test(C) ->
     %% steps:
     %% 1. init ->    [event1, event2, event3, event4], timer 2s
     %% 2. call range limit 2 offset 1 ->    [event5], timer 0s
@@ -139,20 +164,21 @@ simple_call_with_range_test(_C) ->
     %% 3. timeout -> [event7], undefined
     _ = mock_processor(simple_call_with_range_test),
     Id = gen_id(),
-    {ok, ok} = progressor:init(#{ns => ?NS, id => Id, args => <<"init_args">>}),
+    {ok, ok} = progressor:init(#{ns => ?NS(C), id => Id, args => <<"init_args">>}),
     {ok, <<"response">>} = progressor:call(#{
-        ns => ?NS,
+        ns => ?NS(C),
         id => Id,
         args => <<"call_args">>,
         range => #{offset => 1, limit => 2}
     }),
     {ok, <<"response">>} = progressor:call(#{
-        ns => ?NS,
+        ns => ?NS(C),
         id => Id,
         args => <<"call_args_back">>,
         range => #{offset => 5, limit => 2, direction => backward}
     }),
     4 = expect_steps_counter(4),
+    timer:sleep(?AWAIT_TIMEOUT(C)),
     {ok, #{
         process_id := Id,
         status := <<"running">>,
@@ -165,7 +191,7 @@ simple_call_with_range_test(_C) ->
             #{event_id := 6},
             #{event_id := 7}
         ]
-    }} = progressor:get(#{ns => ?NS, id => Id}),
+    }} = progressor:get(#{ns => ?NS(C), id => Id}),
     {ok, #{
         process_id := Id,
         status := <<"running">>,
@@ -178,21 +204,21 @@ simple_call_with_range_test(_C) ->
             #{event_id := 2},
             #{event_id := 1}
         ]
-    }} = progressor:get(#{ns => ?NS, id => Id, range => #{offset => 6, direction => backward}}),
+    }} = progressor:get(#{ns => ?NS(C), id => Id, range => #{offset => 6, direction => backward}}),
     unmock_processor(),
     ok.
 %%
 
 -spec call_replace_timer_test(_) -> _.
-call_replace_timer_test(_C) ->
+call_replace_timer_test(C) ->
     %% steps:
     %% 1. init ->    [event1], timer 2s + remove
     %% 2. call ->    [],       timer 0s (new timer cancel remove)
     %% 3. timeout -> [event2], undefined
     _ = mock_processor(call_replace_timer_test),
     Id = gen_id(),
-    {ok, ok} = progressor:init(#{ns => ?NS, id => Id, args => <<"init_args">>}),
-    {ok, <<"response">>} = progressor:call(#{ns => ?NS, id => Id, args => <<"call_args">>}),
+    {ok, ok} = progressor:init(#{ns => ?NS(C), id => Id, args => <<"init_args">>}),
+    {ok, <<"response">>} = progressor:call(#{ns => ?NS(C), id => Id, args => <<"call_args">>}),
     3 = expect_steps_counter(3),
     %% wait task_scan_timeout, maybe remove works
     timer:sleep(4000),
@@ -213,21 +239,22 @@ call_replace_timer_test(_C) ->
                 timestamp := _Ts2
             }
         ]
-    }} = progressor:get(#{ns => ?NS, id => Id}),
+    }} = progressor:get(#{ns => ?NS(C), id => Id}),
     unmock_processor(),
     ok.
 %%
 -spec call_unset_timer_test(_) -> _.
-call_unset_timer_test(_C) ->
+call_unset_timer_test(C) ->
     %% steps:
     %% 1. init ->    [event1], timer 2s
     %% 2. call ->    [],       unset_timer
     _ = mock_processor(call_unset_timer_test),
     Id = gen_id(),
-    {ok, ok} = progressor:init(#{ns => ?NS, id => Id, args => <<"init_args">>}),
-    {ok, <<"response">>} = progressor:call(#{ns => ?NS, id => Id, args => <<"call_args">>}),
+    {ok, ok} = progressor:init(#{ns => ?NS(C), id => Id, args => <<"init_args">>}),
+    {ok, <<"response">>} = progressor:call(#{ns => ?NS(C), id => Id, args => <<"call_args">>}),
     %% wait 3 steps but got 2 - good!
     2 = expect_steps_counter(3),
+    timer:sleep(?AWAIT_TIMEOUT(C)),
     {ok, #{
         process_id := Id,
         status := <<"running">>,
@@ -239,12 +266,12 @@ call_unset_timer_test(_C) ->
                 timestamp := _Ts1
             }
         ]
-    }} = progressor:get(#{ns => ?NS, id => Id}),
+    }} = progressor:get(#{ns => ?NS(C), id => Id}),
     unmock_processor(),
     ok.
 %%
 -spec postponed_call_test(_) -> _.
-postponed_call_test(_C) ->
+postponed_call_test(C) ->
     %% call between 0 sec timers
     %% steps:
     %% 1. init ->    [],       timer 0s
@@ -253,9 +280,10 @@ postponed_call_test(_C) ->
     %% 4. timeout -> [event3], undefined
     _ = mock_processor(postponed_call_test),
     Id = gen_id(),
-    {ok, ok} = progressor:init(#{ns => ?NS, id => Id, args => <<"init_args">>}),
-    {ok, <<"response">>} = progressor:call(#{ns => ?NS, id => Id, args => <<"call_args">>}),
+    {ok, ok} = progressor:init(#{ns => ?NS(C), id => Id, args => <<"init_args">>}),
+    {ok, <<"response">>} = progressor:call(#{ns => ?NS(C), id => Id, args => <<"call_args">>}),
     4 = expect_steps_counter(4),
+    timer:sleep(?AWAIT_TIMEOUT(C)),
     {ok, #{
         process_id := Id,
         status := <<"running">>,
@@ -279,12 +307,12 @@ postponed_call_test(_C) ->
                 timestamp := _Ts3
             }
         ]
-    }} = progressor:get(#{ns => ?NS, id => Id}),
+    }} = progressor:get(#{ns => ?NS(C), id => Id}),
     unmock_processor(),
     ok.
 %%
 -spec postponed_call_to_suspended_process_test(_) -> _.
-postponed_call_to_suspended_process_test(_C) ->
+postponed_call_to_suspended_process_test(C) ->
     %% call between 0 sec timers
     %% steps:
     %% 1. init ->    [],       timer 0s
@@ -292,9 +320,10 @@ postponed_call_to_suspended_process_test(_C) ->
     %% 3. call ->    [event2], undefined
     _ = mock_processor(postponed_call_to_suspended_process_test),
     Id = gen_id(),
-    {ok, ok} = progressor:init(#{ns => ?NS, id => Id, args => <<"init_args">>}),
-    {ok, <<"response">>} = progressor:call(#{ns => ?NS, id => Id, args => <<"call_args">>}),
+    {ok, ok} = progressor:init(#{ns => ?NS(C), id => Id, args => <<"init_args">>}),
+    {ok, <<"response">>} = progressor:call(#{ns => ?NS(C), id => Id, args => <<"call_args">>}),
     3 = expect_steps_counter(3),
+    timer:sleep(?AWAIT_TIMEOUT(C)),
     {ok, #{
         process_id := Id,
         status := <<"running">>,
@@ -312,12 +341,12 @@ postponed_call_to_suspended_process_test(_C) ->
                 timestamp := _Ts2
             }
         ]
-    }} = progressor:get(#{ns => ?NS, id => Id}),
+    }} = progressor:get(#{ns => ?NS(C), id => Id}),
     unmock_processor(),
     ok.
 %%
 -spec multiple_calls_test(_) -> _.
-multiple_calls_test(_C) ->
+multiple_calls_test(C) ->
     %% call between 0 sec timers
     %% steps:
     %% 1.  init ->    [],        undefined
@@ -326,14 +355,15 @@ multiple_calls_test(_C) ->
     %% 11. call ->    [event10], undefined
     _ = mock_processor(multiple_calls_test),
     Id = gen_id(),
-    {ok, ok} = progressor:init(#{ns => ?NS, id => Id, args => <<"init_args">>}),
+    {ok, ok} = progressor:init(#{ns => ?NS(C), id => Id, args => <<"init_args">>}),
     lists:foreach(
         fun(N) ->
-            spawn(progressor, call, [#{ns => ?NS, id => Id, args => <<N>>}])
+            spawn(progressor, call, [#{ns => ?NS(C), id => Id, args => <<N>>}])
         end,
         lists:seq(1, 10)
     ),
     11 = expect_steps_counter(33),
+    timer:sleep(?AWAIT_TIMEOUT(C)),
     {ok, #{
         process_id := Id,
         status := <<"running">>,
@@ -349,12 +379,12 @@ multiple_calls_test(_C) ->
             #{event_id := 9},
             #{event_id := 10}
         ]
-    }} = progressor:get(#{ns => ?NS, id => Id}),
+    }} = progressor:get(#{ns => ?NS(C), id => Id}),
     unmock_processor(),
     ok.
 
 -spec simple_repair_after_non_retriable_error_test(_) -> _.
-simple_repair_after_non_retriable_error_test(_C) ->
+simple_repair_after_non_retriable_error_test(C) ->
     %% steps:
     %% 1. init                            -> [],       timer 0s
     %% 2. timeout                         -> {error, do_not_retry}
@@ -362,16 +392,18 @@ simple_repair_after_non_retriable_error_test(_C) ->
     %% 4. timeout                         -> [event2], undefined
     _ = mock_processor(simple_repair_after_non_retriable_error_test),
     Id = gen_id(),
-    {ok, ok} = progressor:init(#{ns => ?NS, id => Id, args => <<"init_args">>}),
+    {ok, ok} = progressor:init(#{ns => ?NS(C), id => Id, args => <<"init_args">>}),
     2 = expect_steps_counter(2),
+    timer:sleep(?AWAIT_TIMEOUT(C)),
     {ok, #{
         detail := <<"do_not_retry">>,
         history := [],
         process_id := Id,
         status := <<"error">>
-    }} = progressor:get(#{ns => ?NS, id => Id}),
-    {ok, ok} = progressor:simple_repair(#{ns => ?NS, id => Id, context => <<"simple_repair_ctx">>}),
+    }} = progressor:get(#{ns => ?NS(C), id => Id}),
+    {ok, ok} = progressor:simple_repair(#{ns => ?NS(C), id => Id, context => <<"simple_repair_ctx">>}),
     4 = expect_steps_counter(4),
+    timer:sleep(?AWAIT_TIMEOUT(C)),
     {ok,
         #{
             process_id := Id,
@@ -390,13 +422,13 @@ simple_repair_after_non_retriable_error_test(_C) ->
                     timestamp := _Ts2
                 }
             ]
-        } = Process} = progressor:get(#{ns => ?NS, id => Id}),
+        } = Process} = progressor:get(#{ns => ?NS(C), id => Id}),
     false = erlang:is_map_key(detail, Process),
     unmock_processor(),
     ok.
 
 -spec repair_after_non_retriable_error_test(_) -> _.
-repair_after_non_retriable_error_test(_C) ->
+repair_after_non_retriable_error_test(C) ->
     %% steps:
     %% 1. init ->    [],       timer 0s
     %% 2. timeout -> {error, do_not_retry}
@@ -404,16 +436,18 @@ repair_after_non_retriable_error_test(_C) ->
     %% 4. timeout -> [event2], undefined
     _ = mock_processor(repair_after_non_retriable_error_test),
     Id = gen_id(),
-    {ok, ok} = progressor:init(#{ns => ?NS, id => Id, args => <<"init_args">>}),
+    {ok, ok} = progressor:init(#{ns => ?NS(C), id => Id, args => <<"init_args">>}),
     2 = expect_steps_counter(2),
+    timer:sleep(?AWAIT_TIMEOUT(C)),
     {ok, #{
         detail := <<"do_not_retry">>,
         history := [],
         process_id := Id,
         status := <<"error">>
-    }} = progressor:get(#{ns => ?NS, id => Id}),
-    {ok, ok} = progressor:repair(#{ns => ?NS, id => Id, args => <<"repair_args">>}),
+    }} = progressor:get(#{ns => ?NS(C), id => Id}),
+    {ok, ok} = progressor:repair(#{ns => ?NS(C), id => Id, args => <<"repair_args">>}),
     4 = expect_steps_counter(4),
+    timer:sleep(?AWAIT_TIMEOUT(C)),
     {ok,
         #{
             process_id := Id,
@@ -432,13 +466,13 @@ repair_after_non_retriable_error_test(_C) ->
                     timestamp := _Ts2
                 }
             ]
-        } = Process} = progressor:get(#{ns => ?NS, id => Id}),
+        } = Process} = progressor:get(#{ns => ?NS(C), id => Id}),
     false = erlang:is_map_key(detail, Process),
     unmock_processor(),
     ok.
 %%
 -spec error_after_max_retries_test(_) -> _.
-error_after_max_retries_test(_C) ->
+error_after_max_retries_test(C) ->
     %% steps:
     %% 1. init ->    [],       timer 0s
     %% 2. timeout -> {error, retry_this}
@@ -446,19 +480,20 @@ error_after_max_retries_test(_C) ->
     %% 4. timeout -> {error, retry_this}
     _ = mock_processor(error_after_max_retries_test),
     Id = gen_id(),
-    {ok, ok} = progressor:init(#{ns => ?NS, id => Id, args => <<"init_args">>}),
+    {ok, ok} = progressor:init(#{ns => ?NS(C), id => Id, args => <<"init_args">>}),
     4 = expect_steps_counter(4),
+    timer:sleep(?AWAIT_TIMEOUT(C)),
     {ok, #{
         detail := <<"retry_this">>,
         history := [],
         process_id := Id,
         status := <<"error">>
-    }} = progressor:get(#{ns => ?NS, id => Id}),
+    }} = progressor:get(#{ns => ?NS(C), id => Id}),
     unmock_processor(),
     ok.
 %%
 -spec repair_after_call_error_test(_) -> _.
-repair_after_call_error_test(_C) ->
+repair_after_call_error_test(C) ->
     %% steps:
     %% 1. init ->    [],       undefined
     %% 2. call ->    {error, retry_this}
@@ -466,20 +501,22 @@ repair_after_call_error_test(_C) ->
     %% 4. repair ->  [event1], undefined
     _ = mock_processor(repair_after_call_error_test),
     Id = gen_id(),
-    {ok, ok} = progressor:init(#{ns => ?NS, id => Id, args => <<"init_args">>}),
-    {error, retry_this} = progressor:call(#{ns => ?NS, id => Id, args => <<"call_args">>}),
+    {ok, ok} = progressor:init(#{ns => ?NS(C), id => Id, args => <<"init_args">>}),
+    {error, retry_this} = progressor:call(#{ns => ?NS(C), id => Id, args => <<"call_args">>}),
     2 = expect_steps_counter(2),
+    timer:sleep(?AWAIT_TIMEOUT(C)),
     {ok, #{
         detail := <<"retry_this">>,
         metadata := #{<<"k">> := <<"v">>},
         history := [],
         process_id := Id,
         status := <<"error">>
-    }} = progressor:get(#{ns => ?NS, id => Id}),
+    }} = progressor:get(#{ns => ?NS(C), id => Id}),
     {error, <<"repair_error">>} = progressor:repair(#{
-        ns => ?NS, id => Id, args => <<"bad_repair_args">>
+        ns => ?NS(C), id => Id, args => <<"bad_repair_args">>
     }),
     3 = expect_steps_counter(3),
+    timer:sleep(?AWAIT_TIMEOUT(C)),
     %% shoul not rewrite detail
     {ok, #{
         detail := <<"retry_this">>,
@@ -487,9 +524,10 @@ repair_after_call_error_test(_C) ->
         history := [],
         process_id := Id,
         status := <<"error">>
-    }} = progressor:get(#{ns => ?NS, id => Id}),
-    {ok, ok} = progressor:repair(#{ns => ?NS, id => Id, args => <<"repair_args">>}),
+    }} = progressor:get(#{ns => ?NS(C), id => Id}),
+    {ok, ok} = progressor:repair(#{ns => ?NS(C), id => Id, args => <<"repair_args">>}),
     4 = expect_steps_counter(4),
+    timer:sleep(?AWAIT_TIMEOUT(C)),
     {ok, #{
         process_id := Id,
         status := <<"running">>,
@@ -502,17 +540,18 @@ repair_after_call_error_test(_C) ->
                 timestamp := _Ts1
             }
         ]
-    }} = progressor:get(#{ns => ?NS, id => Id}),
+    }} = progressor:get(#{ns => ?NS(C), id => Id}),
     unmock_processor(),
     ok.
 %%
 -spec remove_by_timer_test(_) -> _.
-remove_by_timer_test(_C) ->
+remove_by_timer_test(C) ->
     %% steps:
     %% 1. init -> [event1, event2], timer 2s + remove
     _ = mock_processor(remove_by_timer_test),
     Id = gen_id(),
-    {ok, ok} = progressor:init(#{ns => ?NS, id => Id, args => <<"init_args">>}),
+    {ok, ok} = progressor:init(#{ns => ?NS(C), id => Id, args => <<"init_args">>}),
+    timer:sleep(?AWAIT_TIMEOUT(C)),
     {ok, #{
         process_id := Id,
         status := <<"running">>,
@@ -530,21 +569,22 @@ remove_by_timer_test(_C) ->
                 timestamp := _Ts2
             }
         ]
-    }} = progressor:get(#{ns => ?NS, id => Id}),
+    }} = progressor:get(#{ns => ?NS(C), id => Id}),
     %% wait tsk_scan_timeout
     timer:sleep(4000),
-    {error, <<"process not found">>} = progressor:get(#{ns => ?NS, id => Id}),
+    {error, <<"process not found">>} = progressor:get(#{ns => ?NS(C), id => Id}),
     unmock_processor(),
     ok.
 %%
 -spec remove_without_timer_test(_) -> _.
-remove_without_timer_test(_C) ->
+remove_without_timer_test(C) ->
     %% steps:
     %% 1. init -> [event1], timer 2s
     %% 2. timeout -> [],    remove
     _ = mock_processor(remove_without_timer_test),
     Id = gen_id(),
-    {ok, ok} = progressor:init(#{ns => ?NS, id => Id, args => <<"init_args">>}),
+    {ok, ok} = progressor:init(#{ns => ?NS(C), id => Id, args => <<"init_args">>}),
+    timer:sleep(?AWAIT_TIMEOUT(C)),
     {ok, #{
         process_id := Id,
         status := <<"running">>,
@@ -556,14 +596,15 @@ remove_without_timer_test(_C) ->
                 timestamp := _Ts1
             }
         ]
-    }} = progressor:get(#{ns => ?NS, id => Id}),
+    }} = progressor:get(#{ns => ?NS(C), id => Id}),
     2 = expect_steps_counter(2),
-    {error, <<"process not found">>} = progressor:get(#{ns => ?NS, id => Id}),
+    timer:sleep(?AWAIT_TIMEOUT(C)),
+    {error, <<"process not found">>} = progressor:get(#{ns => ?NS(C), id => Id}),
     unmock_processor(),
     ok.
 %%
--spec put_process_test(_C) -> _.
-put_process_test(_C) ->
+-spec put_process_test(_) -> _.
+put_process_test(C) ->
     Id = gen_id(),
     Args = #{
         process => #{
@@ -576,7 +617,8 @@ put_process_test(_C) ->
             ]
         }
     },
-    {ok, ok} = progressor:put(#{ns => ?NS, id => Id, args => Args}),
+    {ok, ok} = progressor:put(#{ns => ?NS(C), id => Id, args => Args}),
+    timer:sleep(?AWAIT_TIMEOUT(C)),
     {ok, #{
         process_id := Id,
         status := <<"running">>,
@@ -603,13 +645,13 @@ put_process_test(_C) ->
                 payload := _Pl3
             }
         ]
-    }} = progressor:get(#{ns => ?NS, id => Id}),
+    }} = progressor:get(#{ns => ?NS(C), id => Id}),
 
-    {error, <<"process already exists">>} = progressor:put(#{ns => ?NS, id => Id, args => Args}),
+    {error, <<"process already exists">>} = progressor:put(#{ns => ?NS(C), id => Id, args => Args}),
     ok.
 %%
 -spec put_process_with_timeout_test(_) -> _.
-put_process_with_timeout_test(_C) ->
+put_process_with_timeout_test(C) ->
     %% steps:
     %% 1. put     -> [event1], timer 1s
     %% 2. timeout -> [event2], undefined
@@ -623,23 +665,25 @@ put_process_with_timeout_test(_C) ->
         },
         action => #{set_timer => erlang:system_time(second) + 1}
     },
-    {ok, ok} = progressor:put(#{ns => ?NS, id => Id, args => Args}),
+    {ok, ok} = progressor:put(#{ns => ?NS(C), id => Id, args => Args}),
+    timer:sleep(?AWAIT_TIMEOUT(C)),
     {ok, #{
         process_id := Id,
         status := <<"running">>,
         history := [#{event_id := 1}]
-    }} = progressor:get(#{ns => ?NS, id => Id}),
+    }} = progressor:get(#{ns => ?NS(C), id => Id}),
     1 = expect_steps_counter(1),
+    timer:sleep(?AWAIT_TIMEOUT(C)),
     {ok, #{
         process_id := Id,
         status := <<"running">>,
         history := [#{event_id := 1}, #{event_id := 2}]
-    }} = progressor:get(#{ns => ?NS, id => Id}),
+    }} = progressor:get(#{ns => ?NS(C), id => Id}),
     unmock_processor(),
     ok.
 %%
 -spec put_process_with_remove_test(_) -> _.
-put_process_with_remove_test(_C) ->
+put_process_with_remove_test(C) ->
     %% steps:
     %% 1. put     -> [event1], remove 1s
     %% 2. remove
@@ -652,14 +696,15 @@ put_process_with_remove_test(_C) ->
         },
         action => #{set_timer => erlang:system_time(second) + 1, remove => true}
     },
-    {ok, ok} = progressor:put(#{ns => ?NS, id => Id, args => Args}),
+    {ok, ok} = progressor:put(#{ns => ?NS(C), id => Id, args => Args}),
+    timer:sleep(?AWAIT_TIMEOUT(C)),
     {ok, #{
         process_id := Id,
         status := <<"running">>,
         history := [#{event_id := 1}]
-    }} = progressor:get(#{ns => ?NS, id => Id}),
+    }} = progressor:get(#{ns => ?NS(C), id => Id}),
     timer:sleep(3000),
-    {error, <<"process not found">>} = progressor:get(#{ns => ?NS, id => Id}),
+    {error, <<"process not found">>} = progressor:get(#{ns => ?NS(C), id => Id}),
     ok.
 
 %%%%%%%%%%%%%%%%%%%%%

@@ -5,16 +5,48 @@
 
 -module(progressor_app).
 
+-include("progressor.hrl").
+
 -behaviour(application).
 
 -export([start/2, stop/1]).
 
+-export([start_namespace/2]).
+
 start(_StartType, _StartArgs) ->
-    create_metrics(),
-    progressor_sup:start_link().
+    _ = create_metrics(),
+    {ok, _} = Result = progressor_sup:start_link(),
+    %%%
+    %%% The following code is for backward compatibility with static namespace launching (from sys.config)
+    %% namespaces starting
+    _ = maps:fold(
+        fun(NsID, NsOpts, _Acc) ->
+            FullOpts = prg_utils:make_ns_opts(NsID, NsOpts),
+            {ok, _} = start_namespace(NsID, FullOpts)
+        end,
+        #{},
+        application:get_env(progressor, namespaces, #{})
+    ),
+    %% post hooks execution
+    lists:foreach(
+        fun({Module, Function, Args}) -> ok = erlang:apply(Module, Function, Args) end,
+        application:get_env(progressor, post_init_hooks, [])
+    ),
+    %%%
+    Result.
 
 stop(_State) ->
     ok.
+
+-spec start_namespace(namespace_id(), namespace_opts()) -> supervisor:startchild_ret().
+start_namespace(NsID, NsOpts) ->
+    NS = {NsID, NsOpts},
+    ChildSpec = #{
+        id => NsID,
+        start => {prg_namespace_sup, start_link, [NS]},
+        type => supervisor
+    },
+    supervisor:start_child(progressor_sup, ChildSpec).
 
 %% internal functions
 
