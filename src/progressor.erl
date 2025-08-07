@@ -29,7 +29,8 @@
     args => term(),
     idempotency_key => binary(),
     context => binary(),
-    range => history_range()
+    range => history_range(),
+    options => map()
 }.
 
 %% see receive blocks bellow in this module
@@ -267,10 +268,10 @@ await_task_result(StorageOpts, NsId, KeyOrId, Timeout, Duration) ->
             )
     end.
 
-do_get(#{ns_opts := #{storage := StorageOpts}, id := Id, ns := NsId, range := HistoryRange}) ->
-    prg_storage:get_process(external, StorageOpts, NsId, Id, HistoryRange);
-do_get(#{ns_opts := #{storage := StorageOpts}, id := Id, ns := NsId}) ->
-    prg_storage:get_process(external, StorageOpts, NsId, Id, #{}).
+do_get(#{ns_opts := #{storage := StorageOpts}, id := Id, ns := NsId, range := HistoryRange} = Req) ->
+    prg_storage:get_process(recipient(options(Req)), StorageOpts, NsId, Id, HistoryRange);
+do_get(#{ns_opts := #{storage := StorageOpts}, id := Id, ns := NsId} = Req) ->
+    prg_storage:get_process(recipient(options(Req)), StorageOpts, NsId, Id, #{}).
 
 do_put(
     #{
@@ -437,3 +438,13 @@ maybe_add_key(undefined, _Key, Map) ->
     Map;
 maybe_add_key(Value, Key, Map) ->
     Map#{Key => Value}.
+
+options(#{options := Opts}) ->
+    Opts;
+options(_) ->
+    #{}.
+
+recipient(#{cache := ignore}) ->
+    internal;
+recipient(_Req) ->
+    external.
