@@ -134,7 +134,7 @@ handle_info({timeout, _TRef, restart_replication}, State) ->
     else
         Error ->
             logger:error("Can`t restart replication with error: ~p", [Error]),
-            ReconnectTimeout = application:get_env(progressor, cache_reconnect_timeout, 5000),
+            ReconnectTimeout = application:get_env(progressor, cache_reconnect_timeout, ?DEFAULT_RECONNECT_TIMEOUT),
             erlang:start_timer(ReconnectTimeout, self(), restart_replication),
             {noreply, State}
     end;
@@ -349,7 +349,7 @@ process_by_range(Events, #{offset := After} = Range) ->
         Sorted
     ),
     {lists:sublist(Filtered, Limit), LastEventID};
-process_by_range(Events, _Range) ->
+process_by_range(Events, Range) ->
     [{_, #{<<"event_id">> := LastEventID}} | _] =
         Sorted = lists:sort(
             fun({_, #{<<"event_id">> := EventID1}}, {_, #{<<"event_id">> := EventID2}}) -> EventID1 < EventID2 end,
@@ -359,7 +359,8 @@ process_by_range(Events, _Range) ->
         fun({_, Ev}) -> Ev end,
         Sorted
     ),
-    {History, LastEventID}.
+    Limit = maps:get(limit, Range, erlang:length(History)),
+    {lists:sublist(History, Limit), LastEventID}.
 
 convert_event(#{<<"timestamp">> := null} = Event) ->
     Event;
