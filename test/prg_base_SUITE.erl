@@ -706,9 +706,10 @@ put_process_zombie_test(C) ->
     %% START SQL INJECTION
     {ok, _, _, [{TaskId}]} = epg_pool:query(
         default_pool,
-        "INSERT INTO \"" ++ NS ++ "_tasks\" "
-        "  (process_id, task_type, status, scheduled_time, running_time, args, last_retry_interval, attempts_count)"
-        "  VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING task_id",
+        "INSERT INTO \"" ++ NS ++
+            "_tasks\" "
+            "  (process_id, task_type, status, scheduled_time, running_time, args, last_retry_interval, attempts_count)"
+            "  VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING task_id",
         [
             Id,
             <<"timeout">>,
@@ -722,10 +723,11 @@ put_process_zombie_test(C) ->
     ),
     {ok, 1} = epg_pool:query(
         default_pool,
-        "INSERT INTO \"" ++ NS ++ "_running\" "
-        "  (task_id, process_id, task_type, status, scheduled_time, running_time, args, "
-        "   last_retry_interval, attempts_count)"
-        "  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+        "INSERT INTO \"" ++ NS ++
+            "_running\" "
+            "  (task_id, process_id, task_type, status, scheduled_time, running_time, args, "
+            "   last_retry_interval, attempts_count)"
+            "  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
         [
             TaskId,
             Id,
