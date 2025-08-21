@@ -61,8 +61,7 @@ services:
     depends_on:
       - zookeeper
     healthcheck:
-      # TODO: FIX ME
-      test: exit 0
+      test: ["CMD", "kafka-topics", "--list", "--bootstrap-server", "localhost:9092"]
       interval: 5s
       timeout: 10s
       retries: 5
@@ -84,6 +83,3 @@ services:
       KAFKA_BROKER_ID: 3
       KAFKA_ZOOKEEPER_CONNECT: 'zookeeper:2181'
       KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka3:9092
-
-#volumes:
-#  progressor-data:
