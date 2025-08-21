@@ -218,15 +218,16 @@ collect_zombies(PgOpts, NsId, Timeout) ->
     #{
         processes := ProcessesTable,
         tasks := TaskTable,
+        schedule := ScheduleTable,
         running := RunningTable
     } = prg_pg_utils:tables(NsId),
     NowSec = erlang:system_time(second),
     Now = unixtime_to_datetime(NowSec),
     TsBackward = unixtime_to_datetime(NowSec - (Timeout + ?PROTECT_TIMEOUT)),
-    epg_pool:transaction(
+    {ok, _, _} = epg_pool:transaction(
         Pool,
         fun(Connection) ->
-            {ok, _, _} = epg_pool:query(
+            epg_pool:query(
                 Connection,
                 "WITH zombie_tasks as ("
                 "  DELETE FROM " ++ RunningTable ++
@@ -234,9 +235,12 @@ collect_zombies(PgOpts, NsId, Timeout) ->
                     "    RETURNING process_id, task_id"
                     "  ), "
                     "  t1 AS (UPDATE " ++ TaskTable ++
-                    " SET status = 'cancelled' WHERE process_id IN (SELECT process_id FROM zombie_tasks))"
+                    " SET status = 'cancelled' WHERE status IN ('waiting', 'blocked') "
+                    "    AND process_id IN (SELECT process_id FROM zombie_tasks)),"
                     "  t2 AS (UPDATE " ++ TaskTable ++
-                    " SET status = 'error', finished_time = $2 WHERE task_id IN (SELECT task_id FROM zombie_tasks))"
+                    " SET status = 'error', finished_time = $2 WHERE task_id IN (SELECT task_id FROM zombie_tasks)),"
+                    "  t3 AS (DELETE FROM " ++ ScheduleTable ++
+                    " WHERE process_id IN (SELECT process_id FROM zombie_tasks))"
                     "MERGE INTO " ++ ProcessesTable ++
                     " AS pt USING zombie_tasks AS zt ON pt.process_id = zt.process_id "
                     "  WHEN MATCHED THEN UPDATE SET"

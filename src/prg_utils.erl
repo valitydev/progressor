@@ -7,6 +7,7 @@
 -export([pipe/2]).
 -export([format/1]).
 -export([make_ns_opts/2]).
+-export([unixtime_to_datetime/1]).
 -export([with_observe/3]).
 -export([with_observe/4]).
 
@@ -39,6 +40,10 @@ make_ns_opts(NsId, NsOpts) ->
     ConfigDefaults = application:get_env(progressor, defaults, #{}),
     Defaults = maps:merge(PresetDefaults, ConfigDefaults),
     maps:merge(Defaults, NsOpts).
+
+-spec unixtime_to_datetime(timestamp_sec()) -> calendar:datetime().
+unixtime_to_datetime(TimestampSec) ->
+    calendar:gregorian_seconds_to_datetime(TimestampSec + ?EPOCH_DIFF).
 
 -spec with_observe(_Fun, atom(), [list() | binary()]) -> any().
 with_observe(Fun, MetricKey, Labels) ->

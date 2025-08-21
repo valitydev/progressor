@@ -28,6 +28,7 @@
 -export([remove_by_timer_test/1]).
 -export([remove_without_timer_test/1]).
 -export([put_process_test/1]).
+-export([put_process_zombie_test/1]).
 -export([put_process_with_timeout_test/1]).
 -export([put_process_with_remove_test/1]).
 
@@ -72,6 +73,7 @@ groups() ->
             remove_by_timer_test,
             remove_without_timer_test,
             put_process_test,
+            put_process_zombie_test,
             put_process_with_timeout_test,
             put_process_with_remove_test
         ]},
@@ -680,6 +682,73 @@ put_process_with_timeout_test(C) ->
         history := [#{event_id := 1}, #{event_id := 2}]
     }} = progressor:get(#{ns => ?NS(C), id => Id}),
     unmock_processor(),
+    ok.
+%%
+-spec put_process_zombie_test(_) -> _.
+put_process_zombie_test(C) ->
+    %% steps:
+    %% 1. put     -> [event1], timer 1s
+    %% 2. insert running task from past
+    %% 3. zombie collecttion
+    Id = gen_id(),
+    Args = #{
+        process => #{
+            process_id => Id,
+            status => <<"running">>,
+            history => [event(1)]
+        }
+    },
+    {ok, ok} = progressor:put(#{ns => ?NS(C), id => Id, args => Args}),
+    Now = erlang:system_time(second),
+    ZombieTs = prg_utils:unixtime_to_datetime(Now - 30),
+    NS = erlang:atom_to_list(?NS(C)),
+    %% TODO: rework it via storage backend
+    %% START SQL INJECTION
+    {ok, _, _, [{TaskId}]} = epg_pool:query(
+        default_pool,
+        "INSERT INTO \"" ++ NS ++
+            "_tasks\" "
+            "  (process_id, task_type, status, scheduled_time, running_time, args, last_retry_interval, attempts_count)"
+            "  VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING task_id",
+        [
+            Id,
+            <<"timeout">>,
+            <<"running">>,
+            ZombieTs,
+            ZombieTs,
+            <<>>,
+            0,
+            0
+        ]
+    ),
+    {ok, 1} = epg_pool:query(
+        default_pool,
+        "INSERT INTO \"" ++ NS ++
+            "_running\" "
+            "  (task_id, process_id, task_type, status, scheduled_time, running_time, args, "
+            "   last_retry_interval, attempts_count)"
+            "  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+        [
+            TaskId,
+            Id,
+            <<"timeout">>,
+            <<"running">>,
+            ZombieTs,
+            ZombieTs,
+            <<>>,
+            0,
+            0
+        ]
+    ),
+    %% END SQL INJECTION
+
+    %% await zombie collection (process step timeout (10s) + random part (2s))
+    timer:sleep(12010),
+    {ok, #{
+        process_id := Id,
+        status := <<"error">>,
+        detail := <<"zombie detected">>
+    }} = progressor:get(#{ns => ?NS(C), id => Id}),
     ok.
 %%
 -spec put_process_with_remove_test(_) -> _.
