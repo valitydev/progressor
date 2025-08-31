@@ -116,12 +116,12 @@ do_process_task(
     Deadline,
     #prg_worker_state{
         ns_id = NsId,
-        ns_opts = #{storage := StorageOpts} = NsOpts,
+        ns_opts = #{storage := StorageOpts},
         process = #{process_id := ProcessId} = _Process,
         sidecar_pid = Pid
     } = State
 ) ->
-    ok = prg_worker_sidecar:lifecycle_sink(Pid, Deadline, NsOpts, remove, ProcessId),
+    %% step hook
     ok = prg_worker_sidecar:remove_process(Pid, Deadline, StorageOpts, NsId, ProcessId),
     ok = next_task(self()),
     State#prg_worker_state{process = undefined};
@@ -170,7 +170,7 @@ handle_result(
     Deadline,
     #prg_worker_state{
         ns_id = NsId,
-        ns_opts = #{storage := StorageOpts} = NsOpts,
+        ns_opts = #{storage := StorageOpts},
         process = #{process_id := ProcessId} = Process,
         sidecar_pid = Pid
     } = State
@@ -195,13 +195,7 @@ handle_result(
         last_retry_interval => 0,
         attempts_count => 0
     },
-    ok = prg_worker_sidecar:lifecycle_sink(
-        Pid, Deadline, NsOpts, extract_task_type(TaskHeader), ProcessId
-    ),
-    ok = prg_worker_sidecar:event_sink(Pid, Deadline, NsOpts, ProcessId, Events),
-    %% just for tests
-    ok = maybe_wait_call(application:get_env(progressor, call_wait_timeout, undefined)),
-    %%
+    %% step hook
     SaveResult = prg_worker_sidecar:complete_and_continue(
         Pid,
         Deadline,
@@ -232,13 +226,13 @@ handle_result(
     Deadline,
     #prg_worker_state{
         ns_id = NsId,
-        ns_opts = #{storage := StorageOpts} = NsOpts,
+        ns_opts = #{storage := StorageOpts},
         process = #{process_id := ProcessId} = _Process,
         sidecar_pid = Pid
     } = State
 ) ->
     Response = response(maps:get(response, Result, undefined)),
-    ok = prg_worker_sidecar:lifecycle_sink(Pid, Deadline, NsOpts, remove, ProcessId),
+    %% step hook
     ok = prg_worker_sidecar:remove_process(Pid, Deadline, StorageOpts, NsId, ProcessId),
     _ = maybe_reply(TaskHeader, Response),
     ok = next_task(self()),
@@ -251,15 +245,12 @@ handle_result(
     Deadline,
     #prg_worker_state{
         ns_id = NsId,
-        ns_opts = #{storage := StorageOpts} = NsOpts,
-        process = #{process_id := ProcessId} = Process,
+        ns_opts = #{storage := StorageOpts},
+        process = Process,
         sidecar_pid = Pid
     } = State
 ) ->
-    ok = prg_worker_sidecar:lifecycle_sink(
-        Pid, Deadline, NsOpts, extract_task_type(TaskHeader), ProcessId
-    ),
-    ok = prg_worker_sidecar:event_sink(Pid, Deadline, NsOpts, ProcessId, Events),
+    %% step hook
     ProcessUpdated = update_process(
         maps:without([detail, corrupted_by], Process#{status => <<"running">>}), Result
     ),
@@ -299,16 +290,13 @@ handle_result(
     Deadline,
     #prg_worker_state{
         ns_id = NsId,
-        ns_opts = #{storage := StorageOpts} = NsOpts,
-        process = #{process_id := ProcessId, corrupted_by := ErrorTaskId} = Process,
+        ns_opts = #{storage := StorageOpts},
+        process = #{corrupted_by := ErrorTaskId} = Process,
         sidecar_pid = Pid
     } = State
 ) ->
     Now = erlang:system_time(second),
-    ok = prg_worker_sidecar:lifecycle_sink(
-        Pid, Deadline, NsOpts, extract_task_type(TaskHeader), ProcessId
-    ),
-    ok = prg_worker_sidecar:event_sink(Pid, Deadline, NsOpts, ProcessId, Events),
+    %% step hook
     ProcessUpdated = update_process(
         maps:without([detail, corrupted_by], Process#{status => <<"running">>}), Result
     ),
@@ -370,15 +358,12 @@ handle_result(
     Deadline,
     #prg_worker_state{
         ns_id = NsId,
-        ns_opts = #{storage := StorageOpts} = NsOpts,
-        process = #{process_id := ProcessId} = Process,
+        ns_opts = #{storage := StorageOpts},
+        process = Process,
         sidecar_pid = Pid
     } = State
 ) ->
-    ok = prg_worker_sidecar:lifecycle_sink(
-        Pid, Deadline, NsOpts, extract_task_type(TaskHeader), ProcessId
-    ),
-    ok = prg_worker_sidecar:event_sink(Pid, Deadline, NsOpts, ProcessId, Events),
+    %% step hook
     ProcessUpdated = update_process(
         maps:without([detail, corrupted_by], Process#{status => <<"running">>}), Result
     ),
@@ -418,8 +403,8 @@ handle_result(
     Deadline,
     #prg_worker_state{
         ns_id = NsId,
-        ns_opts = #{storage := StorageOpts} = NsOpts,
-        process = #{process_id := ProcessId} = Process,
+        ns_opts = #{storage := StorageOpts},
+        process = Process,
         sidecar_pid = Pid
     } = State
 ) when
@@ -434,9 +419,7 @@ handle_result(
                 Process;
             _ ->
                 Detail = prg_utils:format(Reason),
-                ok = prg_worker_sidecar:lifecycle_sink(
-                    Pid, Deadline, NsOpts, {error, Detail}, ProcessId
-                ),
+                %% step hook
                 Process#{status => <<"error">>, detail => Detail}
         end,
     TaskResult = #{
@@ -459,8 +442,8 @@ handle_result(
     Deadline,
     #prg_worker_state{
         ns_id = NsId,
-        ns_opts = #{storage := StorageOpts, retry_policy := RetryPolicy} = NsOpts,
-        process = #{process_id := ProcessId} = Process,
+        ns_opts = #{storage := StorageOpts, retry_policy := RetryPolicy},
+        process = Process,
         sidecar_pid = Pid
     } = State
 ) when TaskType =:= timeout; TaskType =:= remove ->
@@ -477,7 +460,7 @@ handle_result(
                 ProcessUpdated = Process#{
                     status => <<"error">>, detail => Detail, corrupted_by => TaskId
                 },
-                ok = prg_worker_sidecar:lifecycle_sink(Pid, Deadline, NsOpts, {error, Detail}, ProcessId),
+                %% step hook
                 ok = prg_worker_sidecar:complete_and_error(
                     Pid, Deadline, StorageOpts, NsId, TaskResult, ProcessUpdated
                 );
@@ -555,20 +538,12 @@ check_retryable(TaskHeader, #{last_retry_interval := LastInterval} = Task, Retry
             not_retryable
     end.
 
-%% machinegun legacy
--define(WOODY_ERROR(Class), {exception, _, {woody_error, Class, _}}).
 -define(TEST_POLICY(Error, RetryPolicy, Timeout, Attempts),
     (Timeout < maps:get(max_timeout, RetryPolicy, infinity) andalso
         Attempts < maps:get(max_attempts, RetryPolicy, infinity) andalso
         not lists:any(fun(E) -> Error =:= E end, maps:get(non_retryable_errors, RetryPolicy, [])))
 ).
 
-is_retryable(?WOODY_ERROR(result_unexpected), _TaskHeader, _RetryPolicy, _Timeout, _Attempts) ->
-    false;
-is_retryable(?WOODY_ERROR(resource_unavailable) = Error, {timeout, undefined}, RetryPolicy, Timeout, Attempts) ->
-    ?TEST_POLICY(Error, RetryPolicy, Timeout, Attempts);
-is_retryable(?WOODY_ERROR(result_unknown) = Error, {timeout, undefined}, RetryPolicy, Timeout, Attempts) ->
-    ?TEST_POLICY(Error, RetryPolicy, Timeout, Attempts);
 is_retryable({exception, _, _}, _TaskHeader, _RetryPolicy, _Timeout, _Attempts) ->
     false;
 is_retryable(Error, {timeout, undefined}, RetryPolicy, Timeout, Attempts) ->
@@ -598,11 +573,6 @@ action_to_task_type(#{remove := true}) ->
     <<"remove">>;
 action_to_task_type(#{set_timer := _}) ->
     <<"timeout">>.
-
-maybe_wait_call(undefined) ->
-    ok;
-maybe_wait_call(Timeout) ->
-    timer:sleep(Timeout).
 
 last_event_id([]) ->
     0;
