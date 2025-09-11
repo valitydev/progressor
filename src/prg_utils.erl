@@ -10,6 +10,7 @@
 -export([unixtime_to_datetime/1]).
 -export([with_observe/3]).
 -export([with_observe/4]).
+-export([define/2]).
 
 -spec registered_name(atom(), string()) -> atom().
 registered_name(BaseAtom, PostfixStr) ->
@@ -26,6 +27,12 @@ format(Term) when is_binary(Term) ->
     Term;
 format(Term) ->
     unicode:characters_to_binary(io_lib:format("~64000p", [Term])).
+
+-spec define(term(), term()) -> term().
+define(undefined, Default) ->
+    Default;
+define(Value, _Default) ->
+    Value.
 
 -spec make_ns_opts(atom(), namespace_opts()) -> namespace_opts().
 make_ns_opts(NsId, NsOpts) ->

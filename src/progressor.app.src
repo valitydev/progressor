@@ -8,10 +8,7 @@
         stdlib,
         jsx,
         prometheus,
-        epg_connector,
-        thrift,
-        mg_proto,
-        brod
+        epg_connector
     ]},
     {env, []},
     {modules, []},

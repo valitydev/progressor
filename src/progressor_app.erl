@@ -98,11 +98,4 @@ create_metrics() ->
         {help, "Task completion durations in millisecond"},
         {buckets, [50, 150, 300, 500, 750, 1000]},
         {labels, [prg_namespace]}
-    ]),
-
-    _ = prometheus_histogram:new([
-        {name, progressor_notification_duration_ms},
-        {help, "Notification durations in millisecond"},
-        {buckets, [10, 50, 150, 300, 500, 1000]},
-        {labels, [prg_namespace, notification_type]}
     ]).

@@ -12,7 +12,7 @@ db_init(#{pool := Pool}, NsId) ->
         tasks := TaskTable,
         schedule := ScheduleTable,
         running := RunningTable,
-        events := EventsTable
+        generations := GensTable
     } = prg_pg_utils:tables(NsId),
     {ok, _, _} = epg_pool:transaction(
         Pool,
@@ -68,10 +68,11 @@ db_init(#{pool := Pool}, NsId) ->
                 Connection,
                 "CREATE TABLE IF NOT EXISTS " ++ ProcessesTable ++
                     " ("
-                    "process_id VARCHAR(80) PRIMARY KEY, "
+                    "process_id VARCHAR(256) PRIMARY KEY, "
                     "status process_status NOT NULL, "
                     "detail TEXT, "
                     "aux_state BYTEA, "
+                    "current_generation INTEGER, "
                     "created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(), "
                     "metadata JSONB)"
             ),
@@ -81,15 +82,16 @@ db_init(#{pool := Pool}, NsId) ->
                 "CREATE TABLE IF NOT EXISTS " ++ TaskTable ++
                     " ("
                     "task_id BIGSERIAL PRIMARY KEY, "
-                    "process_id VARCHAR(80) NOT NULL, "
+                    "process_id VARCHAR(256) NOT NULL, "
                     "task_type task_type NOT NULL, "
                     "status task_status NOT NULL, "
                     "scheduled_time TIMESTAMP WITH TIME ZONE NOT NULL, "
                     "running_time TIMESTAMP WITH TIME ZONE, "
                     "finished_time TIMESTAMP WITH TIME ZONE, "
                     "args BYTEA, "
+                    "generation INTEGER, "
                     "metadata JSONB, "
-                    "idempotency_key VARCHAR(80) UNIQUE, "
+                    "idempotency_key VARCHAR(256) UNIQUE, "
                     "response BYTEA, "
                     "blocked_task BIGINT REFERENCES " ++ TaskTable ++
                     " (task_id), "
@@ -102,7 +104,8 @@ db_init(#{pool := Pool}, NsId) ->
             {ok, _, _} = epg_pool:query(
                 Connection,
                 "ALTER TABLE " ++ ProcessesTable ++
-                    " ADD COLUMN IF NOT EXISTS corrupted_by BIGINT REFERENCES " ++ TaskTable ++ "(task_id)"
+                    " ADD COLUMN IF NOT EXISTS corrupted_by BIGINT REFERENCES " ++ TaskTable ++
+                    " (task_id) DEFERRABLE INITIALLY DEFERRED"
             ),
 
             %% create schedule table
@@ -111,11 +114,12 @@ db_init(#{pool := Pool}, NsId) ->
                 "CREATE TABLE IF NOT EXISTS " ++ ScheduleTable ++
                     " ("
                     "task_id BIGINT PRIMARY KEY, "
-                    "process_id VARCHAR(80) NOT NULL, "
+                    "process_id VARCHAR(256) NOT NULL, "
                     "task_type task_type NOT NULL, "
                     "status task_status NOT NULL, "
                     "scheduled_time TIMESTAMP WITH TIME ZONE NOT NULL, "
                     "args BYTEA, "
+                    "generation INTEGER, "
                     "metadata JSONB, "
                     "last_retry_interval INTEGER NOT NULL, "
                     "attempts_count SMALLINT NOT NULL, "
@@ -130,13 +134,14 @@ db_init(#{pool := Pool}, NsId) ->
                 Connection,
                 "CREATE TABLE IF NOT EXISTS " ++ RunningTable ++
                     " ("
-                    "process_id VARCHAR(80) PRIMARY KEY, "
+                    "process_id VARCHAR(256) PRIMARY KEY, "
                     "task_id BIGINT NOT NULL, "
                     "task_type task_type NOT NULL, "
                     "status task_status NOT NULL, "
                     "scheduled_time TIMESTAMP WITH TIME ZONE NOT NULL, "
                     "running_time TIMESTAMP WITH TIME ZONE NOT NULL, "
                     "args BYTEA, "
+                    "generation INTEGER, "
                     "metadata JSONB, "
                     "last_retry_interval INTEGER NOT NULL, "
                     "attempts_count SMALLINT NOT NULL, "
@@ -146,26 +151,55 @@ db_init(#{pool := Pool}, NsId) ->
                     "FOREIGN KEY (task_id) REFERENCES " ++ TaskTable ++ " (task_id))"
             ),
 
-            %% create events table
+            %% create state generations table
             {ok, _, _} = epg_pool:query(
                 Connection,
-                "CREATE TABLE IF NOT EXISTS " ++ EventsTable ++
+                "CREATE TABLE IF NOT EXISTS " ++ GensTable ++
                     " ("
-                    "process_id VARCHAR(80) NOT NULL, "
+                    "process_id VARCHAR(256) NOT NULL, "
                     "task_id BIGINT NOT NULL, "
-                    "event_id SMALLINT NOT NULL, "
+                    "generation INTEGER NOT NULL, "
                     "timestamp TIMESTAMP WITH TIME ZONE DEFAULT NOW(), "
                     "metadata JSONB, "
                     "payload BYTEA NOT NULL, "
-                    "PRIMARY KEY (process_id, event_id), "
+                    "PRIMARY KEY (process_id, generation), "
                     "FOREIGN KEY (process_id) REFERENCES " ++ ProcessesTable ++
                     " (process_id), "
                     "FOREIGN KEY (task_id) REFERENCES " ++ TaskTable ++ " (task_id))"
             ),
+
+            %% create constraints for generation
+            %% конструкция IF NOT EXISTS неприменима к CONSTRAINT
+            %% пока оставлю это здесь
+            %{ok, _, _} = epg_pool:query(
+            %    Connection,
+            %    "ALTER TABLE " ++ ProcessesTable ++ " ADD CONSTRAINT fk_prc_state_gen "
+            %        " FOREIGN KEY (process_id, current_generation) "
+            %        " REFERENCES " ++ GensTable ++ "(process_id, generation) DEFERRABLE INITIALLY DEFERRED"
+            %),
+            %{ok, _, _} = epg_pool:query(
+            %    Connection,
+            %    "ALTER TABLE " ++ TaskTable ++ " ADD CONSTRAINT fk_prc_state_gen "
+            %        " FOREIGN KEY (process_id, generation) "
+            %        " REFERENCES " ++ GensTable ++ "(process_id, generation) DEFERRABLE INITIALLY DEFERRED"
+            %),
+            %{ok, _, _} = epg_pool:query(
+            %    Connection,
+            %    "ALTER TABLE " ++ ScheduleTable ++ " ADD CONSTRAINT fk_prc_state_gen "
+            %        " FOREIGN KEY (process_id, generation) "
+            %        " REFERENCES " ++ GensTable ++ "(process_id, generation) DEFERRABLE INITIALLY DEFERRED"
+            %),
+            %{ok, _, _} = epg_pool:query(
+            %    Connection,
+            %    "ALTER TABLE " ++ RunningTable ++ " ADD CONSTRAINT fk_prc_state_gen "
+            %        " FOREIGN KEY (process_id, generation) "
+            %        " REFERENCES " ++ GensTable ++ "(process_id, generation) DEFERRABLE INITIALLY DEFERRED"
+            %),
+
             %% create indexes
             {ok, _, _} = epg_pool:query(
                 Connection,
-                "CREATE INDEX IF NOT EXISTS process_idx on " ++ EventsTable ++ " USING HASH (process_id)"
+                "CREATE INDEX IF NOT EXISTS process_idx on " ++ GensTable ++ " USING HASH (process_id)"
             ),
             {ok, _, _} = epg_pool:query(
                 Connection,
@@ -181,27 +215,6 @@ db_init(#{pool := Pool}, NsId) ->
             ),
 
             %% MIGRATIONS
-            %% migrate process_id to varchar 256
-            ok = lists:foreach(
-                fun(T) ->
-                    TableStr = string:replace(T, "\"", "'", all),
-                    {ok, _, [{VarSize}]} = epg_pool:query(
-                        Connection,
-                        "SELECT character_maximum_length FROM information_schema.columns "
-                        "WHERE table_name = " ++ TableStr ++ " AND column_name = 'process_id'"
-                    ),
-                    case VarSize < 256 of
-                        true ->
-                            {ok, _, _} = epg_pool:query(
-                                Connection,
-                                "ALTER TABLE " ++ T ++ "ALTER COLUMN process_id TYPE VARCHAR(256)"
-                            );
-                        false ->
-                            skip
-                    end
-                end,
-                [ProcessesTable, TaskTable, ScheduleTable, RunningTable, EventsTable]
-            ),
             {ok, [], []}
         end
     ),
@@ -214,13 +227,12 @@ cleanup(#{pool := Pool}, NsId) ->
         tasks := TaskTable,
         schedule := ScheduleTable,
         running := RunningTable,
-        events := EventsTable
+        generations := GensTable
     } = prg_pg_utils:tables(NsId),
     epg_pool:transaction(
         Pool,
         fun(Connection) ->
-            {ok, _, _} = epg_pool:query(Connection, "ALTER TABLE " ++ ProcessesTable ++ " DROP COLUMN corrupted_by"),
-            {ok, _, _} = epg_pool:query(Connection, "DROP TABLE " ++ EventsTable),
+            {ok, _, _} = epg_pool:query(Connection, "DROP TABLE " ++ GensTable),
             {ok, _, _} = epg_pool:query(Connection, "DROP TABLE " ++ RunningTable),
             {ok, _, _} = epg_pool:query(Connection, "DROP TABLE " ++ ScheduleTable),
             {ok, _, _} = epg_pool:query(Connection, "DROP TABLE " ++ TaskTable),

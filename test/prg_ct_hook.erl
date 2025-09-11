@@ -3,13 +3,8 @@
 %% API
 -export([init/2, terminate/1, pre_init_per_suite/3]).
 
--define(LIFECYCLE_TOPIC, <<"default_lifecycle_topic">>).
--define(EVENTSINK_TOPIC, <<"default_topic">>).
--define(BROKERS, [{"kafka1", 9092}, {"kafka2", 9092}, {"kafka3", 9092}]).
-
 init(_Id, State) ->
     _ = start_applications(),
-    _ = create_kafka_topics(),
     State.
 
 pre_init_per_suite(_SuiteName, Config, State) ->
@@ -33,7 +28,6 @@ app_list() ->
     %% in order of launch
     [
         epg_connector,
-        brod,
         progressor
     ].
 
@@ -73,13 +67,6 @@ app_env(progressor) ->
                 processor => #{
                     client => prg_ct_processor,
                     options => #{}
-                },
-                notifier => #{
-                    client => default_kafka_client,
-                    options => #{
-                        topic => ?EVENTSINK_TOPIC,
-                        lifecycle_topic => ?LIFECYCLE_TOPIC
-                    }
                 }
             },
             'cached/namespace' => #{
@@ -119,33 +106,4 @@ app_env(epg_connector) ->
             }
         }},
         {force_garbage_collect, true}
-    ];
-app_env(brod) ->
-    [
-        {clients, [
-            {default_kafka_client, [
-                {endpoints, ?BROKERS},
-                {auto_start_producers, true},
-                {default_producer_config, []}
-            ]}
-        ]}
     ].
-
-create_kafka_topics() ->
-    TopicConfig = [
-        #{
-            configs => [],
-            num_partitions => 1,
-            assignments => [],
-            replication_factor => 1,
-            name => ?EVENTSINK_TOPIC
-        },
-        #{
-            configs => [],
-            num_partitions => 1,
-            assignments => [],
-            replication_factor => 1,
-            name => ?LIFECYCLE_TOPIC
-        }
-    ],
-    _ = brod:create_topics(?BROKERS, TopicConfig, #{timeout => 5000}).

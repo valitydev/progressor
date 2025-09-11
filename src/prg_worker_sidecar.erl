@@ -22,9 +22,6 @@
 -export([complete_and_unlock/7]).
 -export([complete_and_error/6]).
 -export([remove_process/5]).
-%% Notifier functions wrapper
--export([event_sink/5]).
--export([lifecycle_sink/5]).
 %%
 -export([get_process/5]).
 -export([get_process/6]).
@@ -40,7 +37,6 @@
 -define(PROCESSING_KEY, progressor_task_processing_duration_ms).
 -define(COMPLETION_KEY, progressor_task_completion_duration_ms).
 -define(REMOVING_KEY, progressor_process_removing_duration_ms).
--define(NOTIFICATION_KEY, progressor_notification_duration_ms).
 
 -dialyzer({nowarn_function, do_with_retry/2}).
 %% API
@@ -63,15 +59,15 @@ process(Pid, Deadline, #{namespace := NS} = NsOpts, {TaskType, _, _} = Request, 
     namespace_id(),
     task_result(),
     process(),
-    [event()],
+    process_state(),
     task()
 ) -> {ok, [task()]} | no_return().
-complete_and_continue(Pid, _Deadline, StorageOpts, NsId, TaskResult, Process, Events, Task) ->
+complete_and_continue(Pid, _Deadline, StorageOpts, NsId, TaskResult, Process, ProcessState, Task) ->
     %% Timeout = Deadline - erlang:system_time(millisecond),
     Fun = fun() ->
         gen_server:call(
             Pid,
-            {complete_and_continue, StorageOpts, NsId, TaskResult, Process, Events, Task},
+            {complete_and_continue, StorageOpts, NsId, TaskResult, Process, ProcessState, Task},
             infinity
         )
     end,
@@ -86,14 +82,14 @@ complete_and_continue(Pid, _Deadline, StorageOpts, NsId, TaskResult, Process, Ev
     namespace_id(),
     task_result(),
     process(),
-    [event()]
+    process_state()
 ) -> {ok, [task()]} | no_return().
-complete_and_suspend(Pid, _Deadline, StorageOpts, NsId, TaskResult, Process, Events) ->
+complete_and_suspend(Pid, _Deadline, StorageOpts, NsId, TaskResult, Process, ProcessState) ->
     %% Timeout = Deadline - erlang:system_time(millisecond),
     Fun = fun() ->
         gen_server:call(
             Pid,
-            {complete_and_suspend, StorageOpts, NsId, TaskResult, Process, Events},
+            {complete_and_suspend, StorageOpts, NsId, TaskResult, Process, ProcessState},
             infinity
         )
     end,
@@ -106,14 +102,14 @@ complete_and_suspend(Pid, _Deadline, StorageOpts, NsId, TaskResult, Process, Eve
     namespace_id(),
     task_result(),
     process(),
-    [event()]
+    process_state()
 ) -> {ok, [task()]} | no_return().
-complete_and_unlock(Pid, _Deadline, StorageOpts, NsId, TaskResult, Process, Events) ->
+complete_and_unlock(Pid, _Deadline, StorageOpts, NsId, TaskResult, Process, ProcessState) ->
     %% Timeout = Deadline - erlang:system_time(millisecond),
     Fun = fun() ->
         gen_server:call(
             Pid,
-            {complete_and_unlock, StorageOpts, NsId, TaskResult, Process, Events},
+            {complete_and_unlock, StorageOpts, NsId, TaskResult, Process, ProcessState},
             infinity
         )
     end,
@@ -142,38 +138,19 @@ remove_process(Pid, _Deadline, StorageOpts, NsId, ProcessId) ->
         gen_server:call(Pid, {remove_process, StorageOpts, NsId, ProcessId}, infinity)
     end,
     prg_utils:with_observe(Fun, ?REMOVING_KEY, [erlang:atom_to_list(NsId)]).
-
-%% notifier wrappers
-
--spec event_sink(pid(), timestamp_ms(), namespace_opts(), id(), [event()]) -> ok | no_return().
-event_sink(Pid, Deadline, #{namespace := NS} = NsOpts, ProcessId, Events) ->
-    Timeout = Deadline - erlang:system_time(millisecond),
-    Fun = fun() ->
-        gen_server:call(Pid, {event_sink, NsOpts, ProcessId, Events}, Timeout)
-    end,
-    prg_utils:with_observe(Fun, ?NOTIFICATION_KEY, [NS, "event_sink"]).
-
--spec lifecycle_sink(pid(), timestamp_ms(), namespace_opts(), task_t() | {error, _Reason}, id()) ->
-    ok | no_return().
-lifecycle_sink(Pid, Deadline, #{namespace := NS} = NsOpts, TaskType, ProcessId) ->
-    Timeout = Deadline - erlang:system_time(millisecond),
-    Fun = fun() ->
-        gen_server:call(Pid, {lifecycle_sink, NsOpts, TaskType, ProcessId}, Timeout)
-    end,
-    prg_utils:with_observe(Fun, ?NOTIFICATION_KEY, [NS, "lifecycle_sink"]).
 %%
 
 -spec get_process(pid(), timestamp_ms(), storage_opts(), namespace_id(), id()) ->
     {ok, process()} | {error, _Reason}.
 get_process(Pid, _Deadline, StorageOpts, NsId, ProcessId) ->
     %% Timeout = Deadline - erlang:system_time(millisecond),
-    gen_server:call(Pid, {get_process, StorageOpts, NsId, ProcessId, #{}}, infinity).
+    gen_server:call(Pid, {get_process, StorageOpts, NsId, ProcessId, latest}, infinity).
 
--spec get_process(pid(), timestamp_ms(), storage_opts(), namespace_id(), id(), history_range()) ->
+-spec get_process(pid(), timestamp_ms(), storage_opts(), namespace_id(), id(), generation()) ->
     {ok, process()} | {error, _Reason}.
-get_process(Pid, _Deadline, StorageOpts, NsId, ProcessId, HistoryRange) ->
+get_process(Pid, _Deadline, StorageOpts, NsId, ProcessId, Generation) ->
     %% Timeout = Deadline - erlang:system_time(millisecond),
-    gen_server:call(Pid, {get_process, StorageOpts, NsId, ProcessId, HistoryRange}, infinity).
+    gen_server:call(Pid, {get_process, StorageOpts, NsId, ProcessId, Generation}, infinity).
 
 -spec get_task(pid(), timestamp_ms(), storage_opts(), namespace_id(), task_id()) ->
     {ok, task()} | {error, _Reason}.
@@ -218,12 +195,12 @@ handle_call(
         end,
     {reply, Response, State};
 handle_call(
-    {complete_and_continue, StorageOpts, NsId, TaskResult, Process, Events, Task},
+    {complete_and_continue, StorageOpts, NsId, TaskResult, Process, ProcessState, Task},
     _From,
     #prg_sidecar_state{} = State
 ) ->
     Fun = fun() ->
-        prg_storage:complete_and_continue(StorageOpts, NsId, TaskResult, Process, Events, Task)
+        prg_storage:complete_and_continue(StorageOpts, NsId, TaskResult, Process, ProcessState, Task)
     end,
     Response = do_with_retry(Fun, ?DEFAULT_DELAY),
     {reply, Response, State};
@@ -258,22 +235,22 @@ handle_call(
     Response = do_with_retry(Fun, ?DEFAULT_DELAY),
     {reply, Response, State};
 handle_call(
-    {complete_and_suspend, StorageOpts, NsId, TaskResult, Process, Events},
+    {complete_and_suspend, StorageOpts, NsId, TaskResult, Process, ProcessState},
     _From,
     #prg_sidecar_state{} = State
 ) ->
     Fun = fun() ->
-        prg_storage:complete_and_suspend(StorageOpts, NsId, TaskResult, Process, Events)
+        prg_storage:complete_and_suspend(StorageOpts, NsId, TaskResult, Process, ProcessState)
     end,
     Response = do_with_retry(Fun, ?DEFAULT_DELAY),
     {reply, Response, State};
 handle_call(
-    {complete_and_unlock, StorageOpts, NsId, TaskResult, Process, Events},
+    {complete_and_unlock, StorageOpts, NsId, TaskResult, Process, ProcessState},
     _From,
     #prg_sidecar_state{} = State
 ) ->
     Fun = fun() ->
-        prg_storage:complete_and_unlock(StorageOpts, NsId, TaskResult, Process, Events)
+        prg_storage:complete_and_unlock(StorageOpts, NsId, TaskResult, Process, ProcessState)
     end,
     Response = do_with_retry(Fun, ?DEFAULT_DELAY),
     {reply, Response, State};
@@ -285,14 +262,6 @@ handle_call(
     Fun = fun() ->
         prg_storage:complete_and_error(StorageOpts, NsId, TaskResult, Process)
     end,
-    Response = do_with_retry(Fun, ?DEFAULT_DELAY),
-    {reply, Response, State};
-handle_call({event_sink, NsOpts, ProcessId, Events}, _From, State) ->
-    Fun = fun() -> prg_notifier:event_sink(NsOpts, ProcessId, Events) end,
-    Response = do_with_retry(Fun, ?DEFAULT_DELAY),
-    {reply, Response, State};
-handle_call({lifecycle_sink, NsOpts, TaskType, ProcessId}, _From, State) ->
-    Fun = fun() -> prg_notifier:lifecycle_sink(NsOpts, TaskType, ProcessId) end,
     Response = do_with_retry(Fun, ?DEFAULT_DELAY),
     {reply, Response, State}.
 
