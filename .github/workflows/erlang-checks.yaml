@@ -31,8 +31,7 @@ jobs:
     with:
       otp-version: ${{ needs.setup.outputs.otp-version }}
       rebar-version: ${{ needs.setup.outputs.rebar-version }}
-      use-thrift: true
-      thrift-version: ${{ needs.setup.outputs.thrift-version }}
+      use-thrift: false
       run-ct-with-compose: true
       use-coveralls: true
       upload-coverage: false
