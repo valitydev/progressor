@@ -100,21 +100,8 @@ simple_timers_test(C) ->
     3 = expect_steps_counter(3),
     ExpectedAux = erlang:term_to_binary(<<"aux_state2">>),
     timer:sleep(?AWAIT_TIMEOUT(C)),
-    {ok, #{
-        status := <<"running">>,
-        state := #{
-            timestamp := _,
-            metadata := #{<<"format_version">> := 1},
-            process_id := Id,
-            task_id := _,
-            generation := 3,
-            payload := _
-        },
-        metadata := #{<<"k">> := <<"v">>},
-        process_id := Id,
-        aux_state := ExpectedAux,
-        current_generation := 3
-    }} = progressor:get(#{ns => ?NS(C), id => Id}),
+    {ok, ?PROCESS_EXPECTED(Id, 3, 3, <<"running">>) = Process} = progressor:get(#{ns => ?NS(C), id => Id}),
+    ?assertEqual(ExpectedAux, maps:get(aux_state, Process)),
     unmock_processor(),
     ok.
 %%
@@ -130,19 +117,7 @@ simple_call_test(C) ->
     {ok, <<"response">>} = progressor:call(#{ns => ?NS(C), id => Id, args => <<"call_args">>}),
     3 = expect_steps_counter(3),
     timer:sleep(?AWAIT_TIMEOUT(C)),
-    {ok, #{
-        status := <<"running">>,
-        state := #{
-            timestamp := _,
-            metadata := #{<<"format_version">> := 1},
-            process_id := Id,
-            task_id := _,
-            generation := 3,
-            payload := _
-        },
-        process_id := Id,
-        current_generation := 3
-    }} = progressor:get(#{ns => ?NS(C), id => Id}),
+    {ok, ?PROCESS_EXPECTED(Id, 3, 3, <<"running">>)} = progressor:get(#{ns => ?NS(C), id => Id}),
     unmock_processor(),
     ok.
 %%
@@ -170,32 +145,8 @@ simple_call_with_generation_test(C) ->
     }),
     4 = expect_steps_counter(4),
     timer:sleep(?AWAIT_TIMEOUT(C)),
-    {ok, #{
-        status := <<"running">>,
-        state := #{
-            timestamp := _,
-            metadata := #{<<"format_version">> := 1},
-            process_id := Id,
-            task_id := _,
-            generation := 4,
-            payload := _
-        },
-        process_id := Id,
-        current_generation := 4
-    }} = progressor:get(#{ns => ?NS(C), id => Id}),
-    {ok, #{
-        status := <<"running">>,
-        state := #{
-            timestamp := _,
-            metadata := #{<<"format_version">> := 1},
-            process_id := Id,
-            task_id := _,
-            generation := 2,
-            payload := _
-        },
-        process_id := Id,
-        current_generation := 4
-    }} = progressor:get(#{ns => ?NS(C), id => Id, generation => 2}),
+    {ok, ?PROCESS_EXPECTED(Id, 4, 4, <<"running">>)} = progressor:get(#{ns => ?NS(C), id => Id}),
+    {ok, ?PROCESS_EXPECTED(Id, 2, 4, <<"running">>)} = progressor:get(#{ns => ?NS(C), id => Id, generation => 2}),
     unmock_processor(),
     ok.
 %%
@@ -212,19 +163,7 @@ call_replace_timer_test(C) ->
     3 = expect_steps_counter(3),
     %% wait task_scan_timeout, maybe remove works
     timer:sleep(4000),
-    {ok, #{
-        status := <<"running">>,
-        state := #{
-            timestamp := _,
-            metadata := #{<<"format_version">> := 1},
-            process_id := Id,
-            task_id := _,
-            generation := 3,
-            payload := _
-        },
-        process_id := Id,
-        current_generation := 3
-    }} = progressor:get(#{ns => ?NS(C), id => Id}),
+    {ok, ?PROCESS_EXPECTED(Id, 3, 3, <<"running">>)} = progressor:get(#{ns => ?NS(C), id => Id}),
     unmock_processor(),
     ok.
 %%
@@ -240,19 +179,7 @@ call_unset_timer_test(C) ->
     %% wait 3 steps but got 2 - good!
     2 = expect_steps_counter(3),
     timer:sleep(?AWAIT_TIMEOUT(C)),
-    {ok, #{
-        status := <<"running">>,
-        state := #{
-            timestamp := _,
-            metadata := #{<<"format_version">> := 1},
-            process_id := Id,
-            task_id := _,
-            generation := 2,
-            payload := _
-        },
-        process_id := Id,
-        current_generation := 2
-    }} = progressor:get(#{ns => ?NS(C), id => Id}),
+    {ok, ?PROCESS_EXPECTED(Id, 2, 2, <<"running">>)} = progressor:get(#{ns => ?NS(C), id => Id}),
     unmock_processor(),
     ok.
 %%
@@ -270,19 +197,7 @@ postponed_call_test(C) ->
     {ok, <<"response">>} = progressor:call(#{ns => ?NS(C), id => Id, args => <<"call_args">>}),
     4 = expect_steps_counter(4),
     timer:sleep(?AWAIT_TIMEOUT(C)),
-    {ok, #{
-        status := <<"running">>,
-        state := #{
-            timestamp := _,
-            metadata := #{<<"format_version">> := 1},
-            process_id := Id,
-            task_id := _,
-            generation := 4,
-            payload := _
-        },
-        process_id := Id,
-        current_generation := 4
-    }} = progressor:get(#{ns => ?NS(C), id => Id}),
+    {ok, ?PROCESS_EXPECTED(Id, 4, 4, <<"running">>)} = progressor:get(#{ns => ?NS(C), id => Id}),
     unmock_processor(),
     ok.
 %%
