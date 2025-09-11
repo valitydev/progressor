@@ -61,9 +61,9 @@ start(Replications) ->
         Replications
     ).
 
--spec get(namespace_id(), id(), history_range()) -> {ok, _Result} | undefined.
-get(NsID, ProcessID, HistoryRange) ->
-    do_get(NsID, ProcessID, HistoryRange).
+-spec get(namespace_id(), id(), generation()) -> {ok, _Result} | undefined.
+get(NsID, ProcessID, Generation) ->
+    do_get(NsID, ProcessID, Generation).
 
 -spec start_link(
     CacheRef :: atom(),
@@ -175,7 +175,7 @@ create_publication_if_not_exists(Connection, NsID) ->
     PubNameEscaped = "\"" ++ PubName ++ "\"",
     #{
         processes := ProcessesTable,
-        events := EventsTable
+        generations := GensTable
     } = prg_pg_utils:tables(NsID),
     %% TODO must be transaction (race condition)
     {ok, _, [{IsPublicationExists}]} = epgsql:equery(
@@ -190,7 +190,7 @@ create_publication_if_not_exists(Connection, NsID) ->
             {ok, _, _} = epgsql:equery(
                 Connection,
                 "CREATE PUBLICATION " ++ PubNameEscaped ++
-                    " FOR TABLE " ++ ProcessesTable ++ " , " ++ EventsTable
+                    " FOR TABLE " ++ ProcessesTable ++ " , " ++ GensTable
             ),
             {ok, PubName}
     end.
@@ -200,11 +200,11 @@ create_tables(NsIDs) ->
         fun(NsID, Acc) ->
             #{
                 processes := ProcessesTable,
-                events := EventsTable
+                generations := GensTable
             } = tables(NsID),
             ProcessesETS = ets:new(ProcessesTable, [named_table]),
-            EventsETS = ets:new(EventsTable, [named_table, bag]),
-            [ProcessesETS, EventsETS | Acc]
+            GensETS = ets:new(GensTable, [named_table, bag]),
+            [ProcessesETS, GensETS | Acc]
         end,
         [],
         NsIDs
@@ -219,23 +219,23 @@ cleanup_tables(#{tables := Tables}) ->
 cleanup_tables(_) ->
     ok.
 
-do_get(NsID, ProcessID, HistoryRange) ->
+do_get(NsID, ProcessID, Generation) ->
     #{
         processes := ProcessesTable,
-        events := EventsTable
+        generations := GensTable
     } = tables(NsID),
-    ProcessResult = ets:lookup(ProcessesTable, ProcessID),
-    case ProcessResult of
+    case ets:lookup(ProcessesTable, ProcessID) of
         [] ->
             undefined;
         [{_, ProcessRaw}] ->
-            Process = prg_pg_utils:marshal_process(ProcessRaw),
-            {EventsRaw, LastEventID} = process_by_range(ets:lookup(EventsTable, ProcessID), HistoryRange),
-            Events = lists:map(
-                fun(Ev) -> prg_pg_utils:marshal_event(convert_event(Ev)) end,
-                EventsRaw
-            ),
-            {ok, Process#{history => Events, last_event_id => LastEventID, range => HistoryRange}}
+            case get_process_state(ets:lookup(GensTable, ProcessID), Generation) of
+                undefined ->
+                    undefined;
+                ProcessStateRaw ->
+                    Process = prg_pg_utils:marshal_process(ProcessRaw),
+                    ProcessState = prg_pg_utils:marshal_process_state(convert_state(ProcessStateRaw)),
+                    {ok, Process#{state => ProcessState}}
+            end
     end.
 
 process_operation({Table, _, _} = ReplData, State) ->
@@ -246,34 +246,34 @@ process_operation(<<"processes">>, NsID, {_Table, insert, #{<<"process_id">> := 
     %% process created
     #{
         processes := ProcessesTable,
-        events := EventsTable
+        generations := GensTable
     } = tables(NsID),
     true = ets:insert(ProcessesTable, {ProcessID, Row}),
-    reset_timer([ProcessesTable, EventsTable], ProcessID, State);
-process_operation(<<"events">>, NsID, {_Table, insert, #{<<"process_id">> := ProcessID} = Row}, State) ->
+    reset_timer([ProcessesTable, GensTable], ProcessID, State);
+process_operation(<<"generations">>, NsID, {_Table, insert, #{<<"process_id">> := ProcessID} = Row}, State) ->
     #{
         processes := ProcessesTable,
-        events := EventsTable
+        generations := GensTable
     } = tables(NsID),
     case ets:lookup(ProcessesTable, ProcessID) of
         [_Process] ->
-            %% known cached process, save events
-            true = ets:insert(EventsTable, {ProcessID, Row}),
-            reset_timer([ProcessesTable, EventsTable], ProcessID, State);
+            %% known cached process, save next generation state
+            true = ets:insert(GensTable, {ProcessID, Row}),
+            reset_timer([ProcessesTable, GensTable], ProcessID, State);
         [] ->
             %% old process, not cached, ignore
             State
     end;
-process_operation(_, NsID, {Table, update, #{<<"process_id">> := ProcessID} = Row}, State) ->
-    TableETS = binary_to_atom(Table),
-    case ets:lookup(TableETS, ProcessID) of
+%% update operation is not applicable for generations table (append only)
+process_operation(<<"processes">>, NsID, {_Table, update, #{<<"process_id">> := ProcessID} = Row}, State) ->
+    #{
+        processes := ProcessesTable,
+        generations := GensTable
+    } = tables(NsID),
+    case ets:lookup(ProcessesTable, ProcessID) of
         [{_, OldRow}] ->
-            #{
-                processes := ProcessesTable,
-                events := EventsTable
-            } = tables(NsID),
-            true = ets:insert(TableETS, {ProcessID, maps:merge(OldRow, Row)}),
-            reset_timer([ProcessesTable, EventsTable], ProcessID, State);
+            true = ets:insert(ProcessesTable, {ProcessID, maps:merge(OldRow, Row)}),
+            reset_timer([ProcessesTable, GensTable], ProcessID, State);
         [] ->
             State
     end;
@@ -302,69 +302,29 @@ tables(NsID) ->
     NsStr = atom_to_list(NsID),
     #{
         processes => list_to_atom(NsStr ++ "_processes"),
-        events => list_to_atom(NsStr ++ "_events")
+        generations => list_to_atom(NsStr ++ "_generations")
     }.
 
-process_by_range([], _) ->
-    {[], 0};
-process_by_range(Events, #{direction := backward, offset := After} = Range) ->
-    [{_, #{<<"event_id">> := LastEventID}} | _] =
-        Reversed = lists:sort(
-            fun({_, #{<<"event_id">> := EventID1}}, {_, #{<<"event_id">> := EventID2}}) -> EventID1 > EventID2 end,
-            Events
-        ),
-    Limit = maps:get(limit, Range, erlang:length(Events)),
-    Filtered = lists:filtermap(
-        fun
-            ({_, #{<<"event_id">> := EvID} = Ev}) when EvID < After -> {true, Ev};
-            (_) -> false
-        end,
-        Reversed
+get_process_state([], _Generation) ->
+    undefined;
+get_process_state(Generations, latest) ->
+    [{_, ProcessState} | _] = lists:sort(
+        fun({_, #{<<"generation">> := GenA}}, {_, #{<<"generation">> := GenB}}) -> GenA > GenB end,
+        Generations
     ),
-    {lists:sublist(Filtered, Limit), LastEventID};
-process_by_range(Events, #{direction := backward} = Range) ->
-    [{_, #{<<"event_id">> := LastEventID}} | _] =
-        Reversed = lists:sort(
-            fun({_, #{<<"event_id">> := EventID1}}, {_, #{<<"event_id">> := EventID2}}) -> EventID1 > EventID2 end,
-            Events
-        ),
-    Limit = maps:get(limit, Range, erlang:length(Events)),
-    History = lists:map(
-        fun({_, Ev}) -> Ev end,
-        lists:sublist(Reversed, Limit)
-    ),
-    {History, LastEventID};
-process_by_range(Events, #{offset := After} = Range) ->
-    [{_, #{<<"event_id">> := LastEventID}} | _] =
-        Sorted = lists:sort(
-            fun({_, #{<<"event_id">> := EventID1}}, {_, #{<<"event_id">> := EventID2}}) -> EventID1 < EventID2 end,
-            Events
-        ),
-    Limit = maps:get(limit, Range, erlang:length(Events)),
-    Filtered = lists:filtermap(
-        fun
-            ({_, #{<<"event_id">> := EvID} = Ev}) when EvID > After -> {true, Ev};
-            (_) -> false
-        end,
-        Sorted
-    ),
-    {lists:sublist(Filtered, Limit), LastEventID};
-process_by_range(Events, Range) ->
-    [{_, #{<<"event_id">> := LastEventID}} | _] =
-        Sorted = lists:sort(
-            fun({_, #{<<"event_id">> := EventID1}}, {_, #{<<"event_id">> := EventID2}}) -> EventID1 < EventID2 end,
-            Events
-        ),
-    History = lists:map(
-        fun({_, Ev}) -> Ev end,
-        Sorted
-    ),
-    Limit = maps:get(limit, Range, erlang:length(History)),
-    {lists:sublist(History, Limit), LastEventID}.
+    ProcessState;
+get_process_state(Generations, Gen) ->
+    Result = lists:search(fun({_, #{<<"generation">> := G}}) -> G =:= Gen end, Generations),
+    case Result of
+        {value, {_, ProcessState}} ->
+            ProcessState;
+        false ->
+            undefined
+    end.
 
-convert_event(#{<<"timestamp">> := null} = Event) ->
-    Event;
-convert_event(#{<<"timestamp">> := DateTime} = Event) ->
-    Event#{<<"timestamp">> => prg_pg_utils:convert(timestamp, DateTime)};
-convert_event(Event) ->
-    Event.
+convert_state(#{<<"timestamp">> := null} = State) ->
+    State;
+convert_state(#{<<"timestamp">> := DateTime} = State) ->
+    State#{<<"timestamp">> => prg_pg_utils:convert(timestamp, DateTime)};
+convert_state(State) ->
+    State.

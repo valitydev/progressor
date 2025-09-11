@@ -7,10 +7,9 @@
     detail => binary(),
     aux_state => binary(),
     metadata => map(),
-    history => [event()],
+    state => process_state(),
     corrupted_by => task_id(),
-    range => history_range(),
-    last_event_id => event_id()
+    current_generation => generation()
 }.
 
 -type task() :: #{
@@ -22,6 +21,7 @@
     running_time => timestamp_sec(),
     finished_time => timestamp_sec(),
     args => binary(),
+    generation => generation(),
     metadata => map(),
     idempotency_key => binary(),
     response => binary(),
@@ -31,14 +31,16 @@
     context => binary()
 }.
 
--type event() :: #{
-    process_id := id(),
-    task_id := task_id(),
-    event_id := event_id(),
-    timestamp := timestamp_sec(),
-    metadata => #{format => pos_integer()},
-    payload := binary()
-}.
+-type process_state() ::
+    #{
+        process_id := id(),
+        task_id := task_id(),
+        generation := generation(),
+        timestamp := timestamp_ms(),
+        metadata => #{format => pos_integer()},
+        payload := binary()
+    }
+    | undefined.
 
 %%%
 %%% Config options
@@ -86,7 +88,8 @@
 %%% Other types
 %%%
 -type id() :: binary().
--type event_id() :: pos_integer().
+-type explicit_generation() :: non_neg_integer().
+-type generation() :: explicit_generation() | latest.
 -type task_id() :: pos_integer().
 
 -type process_status() :: binary().
@@ -106,26 +109,16 @@
 
 -type recipient() :: internal | external.
 
--type history_range() :: #{
-    offset => non_neg_integer(),
-    limit => pos_integer(),
-    direction => forward | backward
-}.
-
 -type processor_intent() :: #{
-    events := [event()],
+    state := process_state(),
     action => action(),
     response => term(),
     aux_state => binary(),
     metadata => map()
 }.
 -type processor_exception(Reason) :: {exception, _Class, Reason}.
--type maybe_transient_error_reason() ::
-    processor_exception({woody_error, {_, atom(), _}})
-    | any().
--type non_transient_error_reason() ::
-    processor_exception({woody_error, {_, result_unexpected, _}})
-    | processor_exception(any()).
+-type maybe_transient_error_reason() :: any().
+-type non_transient_error_reason() :: processor_exception(any()).
 -type process_result() ::
     {ok, processor_intent()}
     | {error, non_transient_error_reason() | maybe_transient_error_reason()}.

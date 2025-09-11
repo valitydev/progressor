@@ -12,7 +12,6 @@
 -export([prepare_init/4]).
 -export([prepare_call/4]).
 -export([prepare_repair/4]).
--export([put_process_data/4]).
 
 %% scan functions
 -export([collect_zombies/3]).
@@ -83,7 +82,7 @@ get_task(Recipient, PgOpts, NsId, TaskId) ->
         {ok, _, []} ->
             {error, not_found};
         {ok, Columns, Rows} ->
-            [Task] = to_maps(Columns, Rows, fun marshal_task/1),
+            [Task] = to_maps(Columns, Rows, fun prg_pg_utils:marshal_task/1),
             {ok, Task}
     end.
 
@@ -103,22 +102,22 @@ get_process_status(PgOpts, NsId, Id) ->
         [{Status}] -> {ok, Status}
     end.
 
--spec get_process(recipient(), pg_opts(), namespace_id(), id(), history_range()) ->
+-spec get_process(recipient(), pg_opts(), namespace_id(), id(), generation()) ->
     {ok, process()} | {error, _Reason}.
-get_process(external = Recipient, #{cache := _DbRef} = PgOpts, NsId, ProcessId, HistoryRange) ->
-    case prg_pg_cache:get(NsId, ProcessId, HistoryRange) of
+get_process(external = Recipient, #{cache := _DbRef} = PgOpts, NsId, ProcessId, Generation) ->
+    case prg_pg_cache:get(NsId, ProcessId, Generation) of
         undefined ->
-            get_process(Recipient, maps:without([cache], PgOpts), NsId, ProcessId, HistoryRange);
+            get_process(Recipient, maps:without([cache], PgOpts), NsId, ProcessId, Generation);
         {ok, _} = Response ->
             Response
     end;
-get_process(Recipient, PgOpts, NsId, ProcessId, HistoryRange) ->
+get_process(Recipient, PgOpts, NsId, ProcessId, Generation) ->
     Pool = get_pool(Recipient, PgOpts),
     #{
         processes := ProcessesTable,
-        events := EventsTable
+        generations := GensTable
     } = prg_pg_utils:tables(NsId),
-    RangeCondition = create_range_condition(HistoryRange),
+    GenCondition = generation_condition(Generation),
     RawResult = epg_pool:transaction(
         Pool,
         fun(Connection) ->
@@ -127,64 +126,23 @@ get_process(Recipient, PgOpts, NsId, ProcessId, HistoryRange) ->
                     {error, <<"process not found">>};
                 {ok, ColumnsPr, RowsPr} ->
                     {ok, _, _} =
-                        {ok, ColumnstEv, RowsEv} = do_get_events(Connection, EventsTable, ProcessId, RangeCondition),
-                    LastEventId = get_last_event_id(Connection, EventsTable, ProcessId),
-                    {ok, {ColumnsPr, RowsPr}, {ColumnstEv, RowsEv}, LastEventId}
+                        {ok, ColumnstSt, RowsSt} = do_get_state(Connection, GensTable, ProcessId, GenCondition),
+                    {ok, {ColumnsPr, RowsPr}, {ColumnstSt, RowsSt}}
             end
         end
     ),
     case RawResult of
         {error, _} = Error ->
             Error;
-        {ok, {ProcColumns, ProcRows}, {EventsColumns, EventsRows}, LastEventId} ->
-            [Process] = to_maps(ProcColumns, ProcRows, fun marshal_process/1),
-            History = to_maps(EventsColumns, EventsRows, fun marshal_event/1),
-            {ok, Process#{history => History, last_event_id => LastEventId, range => HistoryRange}}
-    end.
-
-%%%
-
--spec put_process_data(
-    pg_opts(),
-    namespace_id(),
-    id(),
-    #{process := process(), init_task := task(), active_task => task() | undefined}
-) ->
-    {ok, _Result} | {error, _Reason}.
-put_process_data(PgOpts, NsId, ProcessId, ProcessData) ->
-    #{
-        process := #{
-            history := Events
-        } = Process,
-        init_task := InitTask
-    } = ProcessData,
-    ActiveTask = maps:get(active_task, ProcessData, undefined),
-    Pool = get_pool(external, PgOpts),
-    #{
-        processes := ProcessesTable,
-        tasks := TaskTable,
-        schedule := ScheduleTable,
-        events := EventsTable
-    } = prg_pg_utils:tables(NsId),
-    epg_pool:transaction(
-        Pool,
-        fun(Connection) ->
-            case do_save_process(Connection, ProcessesTable, Process) of
-                {ok, _} ->
-                    {ok, _, _, [{InitTaskId}]} = do_save_task(Connection, TaskTable, InitTask),
-                    lists:foreach(
-                        fun(Ev) ->
-                            {ok, _} = do_save_event(Connection, EventsTable, ProcessId, InitTaskId, Ev)
-                        end,
-                        Events
-                    ),
-                    ok = maybe_schedule_task(Connection, TaskTable, ScheduleTable, ActiveTask),
-                    {ok, ok};
-                {error, #error{codename = unique_violation}} ->
-                    {error, <<"process already exists">>}
+        {ok, {ProcColumns, ProcRows}, {StateColumns, StateRows}} ->
+            [Process] = to_maps(ProcColumns, ProcRows, fun prg_pg_utils:marshal_process/1),
+            case to_maps(StateColumns, StateRows, fun prg_pg_utils:marshal_process_state/1) of
+                [] ->
+                    {ok, Process};
+                [ProcState] ->
+                    {ok, Process#{state => ProcState}}
             end
-        end
-    ).
+    end.
 
 -spec remove_process(pg_opts(), namespace_id(), id()) -> ok | no_return().
 remove_process(PgOpts, NsId, ProcessId) ->
@@ -194,7 +152,7 @@ remove_process(PgOpts, NsId, ProcessId) ->
         tasks := TaskTable,
         schedule := ScheduleTable,
         running := RunningTable,
-        events := EventsTable
+        generations := GensTable
     } = prg_pg_utils:tables(NsId),
     epg_pool:transaction(
         Pool,
@@ -204,8 +162,9 @@ remove_process(PgOpts, NsId, ProcessId) ->
             {ok, _S} =
                 epg_pool:query(Connection, "DELETE FROM " ++ ScheduleTable ++ " WHERE process_id = $1", [ProcessId]),
             {ok, _E} =
-                epg_pool:query(Connection, "DELETE FROM " ++ EventsTable ++ " WHERE process_id = $1", [ProcessId]),
-            {ok, _T} = epg_pool:query(Connection, "DELETE FROM " ++ TaskTable ++ " WHERE process_id = $1", [ProcessId]),
+                epg_pool:query(Connection, "DELETE FROM " ++ GensTable ++ " WHERE process_id = $1", [ProcessId]),
+            {ok, _T} =
+                epg_pool:query(Connection, "DELETE FROM " ++ TaskTable ++ " WHERE process_id = $1", [ProcessId]),
             {ok, _P} =
                 epg_pool:query(Connection, "DELETE FROM " ++ ProcessesTable ++ " WHERE process_id = $1", [ProcessId])
         end
@@ -280,18 +239,18 @@ search_timers(PgOpts, NsId, _Timeout, Limit) ->
                         "      ORDER BY scheduled_time ASC LIMIT $3)"
                         "    RETURNING"
                         "      task_id, process_id, task_type, 'running'::task_status as status, scheduled_time, "
-                        "      TO_TIMESTAMP($2, 'YYYY-MM-DD HH24:MI:SS') as running_time, args, metadata, "
+                        "      TO_TIMESTAMP($2, 'YYYY-MM-DD HH24:MI:SS') as running_time, args, generation, metadata, "
                         "      last_retry_interval, attempts_count, context"
                         "  ) "
                         "INSERT INTO " ++ RunningTable ++
                         "  (task_id, process_id, task_type, status, scheduled_time, running_time,"
-                        "   args, metadata, last_retry_interval, attempts_count, context) "
+                        "   args, generation, metadata, last_retry_interval, attempts_count, context) "
                         "  SELECT * FROM tasks_for_run RETURNING *",
                     [Now, NowText, Limit]
                 )
             end
         ),
-    to_maps(Columns, Rows, fun marshal_task/1).
+    to_maps(Columns, Rows, fun prg_pg_utils:marshal_task/1).
 
 -spec search_calls(pg_opts(), namespace_id(), pos_integer()) -> [task()].
 search_calls(PgOpts, NsId, Limit) ->
@@ -317,18 +276,18 @@ search_calls(PgOpts, NsId, Limit) ->
                     "      GROUP BY process_id ORDER BY min ASC LIMIT $2"
                     "    ) "
                     "    RETURNING task_id, process_id, task_type, 'running'::task_status as status, scheduled_time, "
-                    "      TO_TIMESTAMP($1, 'YYYY-MM-DD HH24:MI:SS') as running_time, args, metadata, "
+                    "      TO_TIMESTAMP($1, 'YYYY-MM-DD HH24:MI:SS') as running_time, args, generation, metadata, "
                     "      last_retry_interval, attempts_count, context"
                     "  ) "
                     "INSERT INTO " ++ RunningTable ++
                     "  (task_id, process_id, task_type, status, scheduled_time, running_time, args,"
-                    "   metadata, last_retry_interval, attempts_count, context) "
+                    "   generation, metadata, last_retry_interval, attempts_count, context) "
                     "  SELECT * FROM tasks_for_run RETURNING *",
                 [Now, Limit]
             )
         end
     ),
-    to_maps(Columns, Rows, fun marshal_task/1).
+    to_maps(Columns, Rows, fun prg_pg_utils:marshal_task/1).
 
 -spec prepare_init(pg_opts(), namespace_id(), process(), task()) ->
     {ok, {postpone, task_id()} | {continue, task_id()}} | {error, _Reason}.
@@ -435,20 +394,20 @@ prepare_repair(PgOpts, NsId, _ProcessId, #{status := <<"running">>} = Task) ->
         end
     ).
 
--spec complete_and_continue(pg_opts(), namespace_id(), task_result(), process(), [event()], task()) ->
+-spec complete_and_continue(pg_opts(), namespace_id(), task_result(), process(), process_state(), task()) ->
     {ok, [task()]}.
-complete_and_continue(PgOpts, NsId, TaskResult, Process, Events, NextTask) ->
+complete_and_continue(PgOpts, NsId, TaskResult, Process, NextGenerationState, NextTask) ->
     % update completed task and process,
     % cancel blocked and waiting timers,
     % save new timer,
-    % return continuation call if exists
+    % return continuation call if exists or new timer if need run
     Pool = get_pool(internal, PgOpts),
     #{
         processes := ProcessesTable,
         tasks := TaskTable,
         schedule := ScheduleTable,
         running := RunningTable,
-        events := EventsTable
+        generations := GensTable
     } = prg_pg_utils:tables(NsId),
     #{task_id := TaskId} = TaskResult,
     #{process_id := ProcessId} = Process,
@@ -456,13 +415,7 @@ complete_and_continue(PgOpts, NsId, TaskResult, Process, Events, NextTask) ->
         Pool,
         fun(Connection) ->
             {ok, _} = do_update_process(Connection, ProcessesTable, Process),
-            %% TODO implement via batch execute
-            lists:foreach(
-                fun(Ev) ->
-                    {ok, _} = do_save_event(Connection, EventsTable, ProcessId, TaskId, Ev)
-                end,
-                Events
-            ),
+            {ok, _} = do_save_generation(Connection, GensTable, ProcessId, TaskId, NextGenerationState),
             {ok, _, _} = do_cancel_timer(Connection, TaskTable, ScheduleTable, ProcessId),
             {ok, _, _, [{NextTaskId}]} = do_save_task(Connection, TaskTable, NextTask),
             case
@@ -499,11 +452,11 @@ complete_and_continue(PgOpts, NsId, TaskResult, Process, Events, NextTask) ->
             end
         end
     ),
-    {ok, to_maps(Columns, Rows, fun marshal_task/1)}.
+    {ok, to_maps(Columns, Rows, fun prg_pg_utils:marshal_task/1)}.
 
--spec complete_and_suspend(pg_opts(), namespace_id(), task_result(), process(), [event()]) ->
+-spec complete_and_suspend(pg_opts(), namespace_id(), task_result(), process(), process_state()) ->
     {ok, [task()]}.
-complete_and_suspend(PgOpts, NsId, TaskResult, Process, Events) ->
+complete_and_suspend(PgOpts, NsId, TaskResult, Process, NextGenerationState) ->
     % update completed task and process, cancel blocked and waiting timers
     Pool = get_pool(internal, PgOpts),
     #{
@@ -511,7 +464,7 @@ complete_and_suspend(PgOpts, NsId, TaskResult, Process, Events) ->
         tasks := TaskTable,
         schedule := ScheduleTable,
         running := RunningTable,
-        events := EventsTable
+        generations := GensTable
     } = prg_pg_utils:tables(NsId),
     #{task_id := TaskId} = TaskResult,
     #{process_id := ProcessId} = Process,
@@ -519,17 +472,12 @@ complete_and_suspend(PgOpts, NsId, TaskResult, Process, Events) ->
         Pool,
         fun(Connection) ->
             {ok, _} = do_update_process(Connection, ProcessesTable, Process),
-            lists:foreach(
-                fun(Ev) ->
-                    {ok, _} = do_save_event(Connection, EventsTable, ProcessId, TaskId, Ev)
-                end,
-                Events
-            ),
+            {ok, _} = do_save_generation(Connection, GensTable, ProcessId, TaskId, NextGenerationState),
             {ok, _, _} = do_cancel_timer(Connection, TaskTable, ScheduleTable, ProcessId),
             do_complete_task(Connection, TaskTable, ScheduleTable, RunningTable, TaskResult#{process_id => ProcessId})
         end
     ),
-    {ok, to_maps(Columns, Rows, fun marshal_task/1)}.
+    {ok, to_maps(Columns, Rows, fun prg_pg_utils:marshal_task/1)}.
 
 -spec complete_and_error(pg_opts(), namespace_id(), task_result(), process()) -> ok.
 complete_and_error(PgOpts, NsId, TaskResult, Process) ->
@@ -558,9 +506,9 @@ complete_and_error(PgOpts, NsId, TaskResult, Process) ->
     ),
     ok.
 
--spec complete_and_unlock(pg_opts(), namespace_id(), task_result(), process(), [event()]) ->
+-spec complete_and_unlock(pg_opts(), namespace_id(), task_result(), process(), process_state()) ->
     {ok, [task()]}.
-complete_and_unlock(PgOpts, NsId, TaskResult, Process, Events) ->
+complete_and_unlock(PgOpts, NsId, TaskResult, Process, NextGenerationState) ->
     % update completed task and process, unlock blocked task
     Pool = get_pool(internal, PgOpts),
     #{
@@ -568,7 +516,7 @@ complete_and_unlock(PgOpts, NsId, TaskResult, Process, Events) ->
         tasks := TaskTable,
         schedule := ScheduleTable,
         running := RunningTable,
-        events := EventsTable
+        generations := GensTable
     } = prg_pg_utils:tables(NsId),
     #{task_id := TaskId} = TaskResult,
     #{process_id := ProcessId} = Process,
@@ -576,12 +524,7 @@ complete_and_unlock(PgOpts, NsId, TaskResult, Process, Events) ->
         Pool,
         fun(Connection) ->
             {ok, _} = do_update_process(Connection, ProcessesTable, Process),
-            lists:foreach(
-                fun(Ev) ->
-                    {ok, _} = do_save_event(Connection, EventsTable, ProcessId, TaskId, Ev)
-                end,
-                Events
-            ),
+            {ok, _} = do_save_generation(Connection, GensTable, ProcessId, TaskId, NextGenerationState),
             Completion = do_complete_task(
                 Connection,
                 TaskTable,
@@ -600,7 +543,7 @@ complete_and_unlock(PgOpts, NsId, TaskResult, Process, Events) ->
             Completion
         end
     ),
-    {ok, to_maps(Columns, Rows, fun marshal_task/1)}.
+    {ok, to_maps(Columns, Rows, fun prg_pg_utils:marshal_task/1)}.
 
 -spec db_init(pg_opts(), namespace_id()) -> ok.
 db_init(PgOpts, NsId) ->
@@ -616,29 +559,18 @@ cleanup(PgOpts, NsId) ->
 
 %% Internal functions
 
-create_range_condition(Range) ->
-    after_id(Range) ++ direction(Range) ++ limit(Range).
+generation_condition(latest) ->
+    " ORDER BY generation DESC LIMIT 1";
+generation_condition(Generation) ->
+    " AND generation = " ++ integer_to_list(Generation) ++ " ".
 
-after_id(#{offset := After} = Range) ->
-    Direction = maps:get(direction, Range, forward),
-    " AND event_id " ++ operator(Direction) ++ integer_to_list(After) ++ " ";
-after_id(_) ->
-    " ".
-
-operator(forward) ->
-    " > ";
-operator(backward) ->
-    " < ".
-
-limit(#{limit := Limit}) ->
-    " LIMIT " ++ integer_to_list(Limit) ++ " ";
-limit(_) ->
-    " ".
-
-direction(#{direction := backward}) ->
-    " ORDER BY event_id DESC ";
-direction(_) ->
-    " ORDER BY event_id ASC ".
+do_get_state(Connection, GensTable, ProcessId, GenCondition) ->
+    SQL = "SELECT * FROM " ++ GensTable ++ " WHERE process_id = $1 " ++ GenCondition,
+    epg_pool:query(
+        Connection,
+        SQL,
+        [ProcessId]
+    ).
 
 do_get_process(Connection, Table, ProcessId) ->
     epg_pool:query(
@@ -647,27 +579,15 @@ do_get_process(Connection, Table, ProcessId) ->
         [ProcessId]
     ).
 
-do_get_events(Connection, EventsTable, ProcessId, RangeCondition) ->
-    SQL = "SELECT * FROM " ++ EventsTable ++ " WHERE process_id = $1 " ++ RangeCondition,
-    epg_pool:query(
-        Connection,
-        SQL,
-        [ProcessId]
-    ).
-
-get_last_event_id(Connection, EventsTable, ProcessId) ->
-    SQL = "SELECT max(event_id) FROM " ++ EventsTable ++ " WHERE process_id = $1",
-    Result = epg_pool:query(
-        Connection,
-        SQL,
-        [ProcessId]
-    ),
-    case Result of
-        {ok, _, [{null}]} ->
-            0;
-        {ok, _, [{Value}]} ->
-            Value
-    end.
+%define_generation(Connection, Table, ProcessId, latest) ->
+%    {ok, _Columns, [{Generation}]} = epg_pool:query(
+%        Connection,
+%        "SELECT current_generation from " ++ Table ++ " WHERE process_id = $1",
+%        [ProcessId]
+%    ),
+%    Generation;
+%define_generation(_Connection, _Table, _ProcessId, Generation) ->
+%    Generation.
 
 do_save_process(Connection, Table, Process) ->
     #{
@@ -677,23 +597,18 @@ do_save_process(Connection, Table, Process) ->
     Detail = maps:get(detail, Process, null),
     AuxState = maps:get(aux_state, Process, null),
     Meta = maps:get(metadata, Process, null),
+    Generation = maps:get(current_generation, Process, null),
     epg_pool:query(
         Connection,
-        "INSERT INTO " ++ Table ++ " (process_id, status, detail, aux_state, metadata) VALUES ($1, $2, $3, $4, $5)",
-        [ProcessId, Status, Detail, AuxState, json_encode(Meta)]
+        "INSERT INTO " ++ Table ++ " (process_id, status, detail, aux_state, metadata, current_generation)" ++
+            " VALUES ($1, $2, $3, $4, $5, $6)",
+        [ProcessId, Status, Detail, AuxState, json_encode(Meta), Generation]
     ).
 
-maybe_schedule_task(_Connection, _TaskTable, _ScheduleTable, undefined) ->
-    ok;
-maybe_schedule_task(Connection, TaskTable, ScheduleTable, Task) ->
-    {ok, _, _, [{TaskId}]} = do_save_task(Connection, TaskTable, Task),
-    {ok, _, _, _} = do_save_schedule(Connection, ScheduleTable, Task#{task_id => TaskId}),
-    ok.
+do_save_task(Connection, TaskTable, Task) ->
+    do_save_task(Connection, TaskTable, Task, " task_id ").
 
-do_save_task(Connection, Table, Task) ->
-    do_save_task(Connection, Table, Task, " task_id ").
-
-do_save_task(Connection, Table, Task, Returning) ->
+do_save_task(Connection, TaskTable, Task, Returning) ->
     #{
         process_id := ProcessId,
         task_type := TaskType,
@@ -702,6 +617,7 @@ do_save_task(Connection, Table, Task, Returning) ->
         attempts_count := AttemptsCount
     } = Task,
     Args = maps:get(args, Task, null),
+    Generation = maps:get(generation, Task, null),
     MetaData = maps:get(metadata, Task, null),
     IdempotencyKey = maps:get(idempotency_key, Task, null),
     BlockedTask = maps:get(blocked_task, Task, null),
@@ -712,11 +628,11 @@ do_save_task(Connection, Table, Task, Returning) ->
     Context = maps:get(context, Task, <<>>),
     epg_pool:query(
         Connection,
-        "INSERT INTO " ++ Table ++
+        "INSERT INTO " ++ TaskTable ++
             " "
-            "  (process_id, task_type, status, scheduled_time, running_time, finished_time, args, "
+            "  (process_id, task_type, status, scheduled_time, running_time, finished_time, args, generation,"
             "   metadata, idempotency_key, blocked_task, response, last_retry_interval, attempts_count, context)"
-            "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING " ++ Returning,
+            "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) RETURNING " ++ Returning,
         [
             ProcessId,
             TaskType,
@@ -725,6 +641,7 @@ do_save_task(Connection, Table, Task, Returning) ->
             RunningTs,
             FinishedTs,
             Args,
+            Generation,
             json_encode(MetaData),
             IdempotencyKey,
             BlockedTask,
@@ -734,7 +651,6 @@ do_save_task(Connection, Table, Task, Returning) ->
             Context
         ]
     ).
-%%
 
 do_save_running(Connection, Table, Task) ->
     do_save_running(Connection, Table, Task, " task_id ").
@@ -750,6 +666,7 @@ do_save_running(Connection, Table, Task, Returning) ->
         attempts_count := AttemptsCount
     } = Task,
     Args = maps:get(args, Task, null),
+    Generation = maps:get(generation, Task, null),
     MetaData = maps:get(metadata, Task, null),
     RunningTs = erlang:system_time(second),
     Context = maps:get(context, Task, <<>>),
@@ -758,8 +675,8 @@ do_save_running(Connection, Table, Task, Returning) ->
         "INSERT INTO " ++ Table ++
             " "
             "  (task_id, process_id, task_type, status, scheduled_time, running_time, "
-            "    args, metadata, last_retry_interval, attempts_count, context)"
-            "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) "
+            "    args, generation, metadata, last_retry_interval, attempts_count, context)"
+            "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) "
             "  ON CONFLICT (process_id) DO NOTHING RETURNING " ++ Returning,
         [
             TaskId,
@@ -769,6 +686,7 @@ do_save_running(Connection, Table, Task, Returning) ->
             unixtime_to_datetime(ScheduledTs),
             unixtime_to_datetime(RunningTs),
             Args,
+            Generation,
             json_encode(MetaData),
             LastRetryInterval,
             AttemptsCount,
@@ -790,15 +708,16 @@ do_save_schedule(Connection, Table, Task, Returning) ->
         attempts_count := AttemptsCount
     } = Task,
     Args = maps:get(args, Task, null),
+    Generation = maps:get(generation, Task, null),
     MetaData = maps:get(metadata, Task, null),
     Context = maps:get(context, Task, <<>>),
     epg_pool:query(
         Connection,
         "INSERT INTO " ++ Table ++
             " "
-            "  (task_id, process_id, task_type, status, scheduled_time, args,"
+            "  (task_id, process_id, task_type, status, scheduled_time, args, generation, "
             "   metadata, last_retry_interval, attempts_count, context)"
-            "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING " ++ Returning,
+            "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING " ++ Returning,
         [
             TaskId,
             ProcessId,
@@ -806,6 +725,7 @@ do_save_schedule(Connection, Table, Task, Returning) ->
             Status,
             unixtime_to_datetime(ScheduledTs),
             Args,
+            Generation,
             json_encode(MetaData),
             LastRetryInterval,
             AttemptsCount,
@@ -836,6 +756,7 @@ do_get_task(Connection, Table, TaskId) ->
 do_update_process(Connection, ProcessesTable, Process) ->
     #{
         process_id := ProcessId,
+        current_generation := Generation,
         status := Status
     } = Process,
     Detail = maps:get(detail, Process, null),
@@ -845,24 +766,26 @@ do_update_process(Connection, ProcessesTable, Process) ->
     epg_pool:query(
         Connection,
         "UPDATE " ++ ProcessesTable ++
-            " SET status = $1, detail = $2, aux_state = $3, metadata = $4, corrupted_by = $5 "
-            "WHERE process_id = $6",
-        [Status, Detail, AuxState, json_encode(MetaData), CorruptedBy, ProcessId]
+            " SET status = $1, detail = $2, aux_state = $3, metadata = $4, corrupted_by = $5, current_generation = $6 "
+            "WHERE process_id = $7",
+        [Status, Detail, AuxState, json_encode(MetaData), CorruptedBy, Generation, ProcessId]
     ).
 
-do_save_event(Connection, EventsTable, ProcessId, TaskId, Event) ->
+do_save_generation(_Connection, _GensTable, _ProcessId, _TaskId, undefined) ->
+    {ok, 0};
+do_save_generation(Connection, GensTable, ProcessId, TaskId, ProcessState) ->
     #{
-        event_id := EventId,
-        timestamp := EventTs,
+        generation := Generation,
+        timestamp := GenTs,
         payload := Payload
-    } = Event,
-    MetaData = maps:get(metadata, Event, null),
+    } = ProcessState,
+    MetaData = maps:get(metadata, ProcessState, null),
     epg_pool:query(
         Connection,
-        "INSERT INTO " ++ EventsTable ++
-            " (process_id, task_id, event_id, timestamp, payload, metadata) "
+        "INSERT INTO " ++ GensTable ++
+            " (process_id, task_id, generation, timestamp, payload, metadata) "
             "VALUES ($1, $2, $3, $4, $5, $6)",
-        [ProcessId, TaskId, EventId, unixtime_to_datetime(EventTs), Payload, json_encode(MetaData)]
+        [ProcessId, TaskId, Generation, unixtime_to_datetime(GenTs), Payload, json_encode(MetaData)]
     ).
 
 do_complete_task(Connection, TaskTable, ScheduleTable, RunningTable, TaskResult) ->
@@ -871,16 +794,16 @@ do_complete_task(Connection, TaskTable, ScheduleTable, RunningTable, TaskResult)
         process_id := ProcessId,
         status := Status
     } = TaskResult,
+    Generation = maps:get(generation, TaskResult, null),
     Response = maps:get(response, TaskResult, null),
     FinishedTime = maps:get(finished_time, TaskResult, erlang:system_time(second)),
     {ok, _} = epg_pool:query(
         Connection,
-        "WITH deleted AS("
-        "  DELETE FROM " ++ RunningTable ++
-            " WHERE process_id = $4"
-            "  )"
-            "UPDATE " ++ TaskTable ++ " SET status = $1, response = $2, finished_time = $3 WHERE task_id = $5",
-        [Status, Response, unixtime_to_datetime(FinishedTime), ProcessId, TaskId]
+        "WITH deleted AS (DELETE FROM " ++ RunningTable ++
+            " WHERE process_id = $1)"
+            "UPDATE " ++ TaskTable ++
+            " SET status = $2, response = $3, finished_time = $4, generation = $5 WHERE task_id = $6",
+        [ProcessId, Status, Response, unixtime_to_datetime(FinishedTime), Generation, TaskId]
     ),
     case Status of
         <<"error">> ->
@@ -897,12 +820,12 @@ do_complete_task(Connection, TaskTable, ScheduleTable, RunningTable, TaskResult)
                     "    (SELECT min(task_id) FROM " ++ ScheduleTable ++
                     "      WHERE process_id = $1 AND status = 'waiting' AND task_type IN ('call', 'repair')) "
                     "    RETURNING task_id, process_id, task_type, 'running'::task_status as status, scheduled_time, "
-                    "      TO_TIMESTAMP($2, 'YYYY-MM-DD HH24:MI:SS') as running_time, args, metadata, "
+                    "      TO_TIMESTAMP($2, 'YYYY-MM-DD HH24:MI:SS') as running_time, args, generation, metadata, "
                     "      last_retry_interval, attempts_count, context"
                     "  ) "
                     "INSERT INTO " ++ RunningTable ++
                     " (task_id, process_id, task_type, status, scheduled_time, running_time, args, "
-                    "  metadata, last_retry_interval, attempts_count, context)"
+                    "  generation, metadata, last_retry_interval, attempts_count, context)"
                     " SELECT * FROM postponed_tasks RETURNING *",
                 [ProcessId, RunningTime]
             )
@@ -1034,65 +957,6 @@ json_encode(null) ->
     null;
 json_encode(MetaData) ->
     jsx:encode(MetaData).
-
-%% Marshalling
-
-marshal_task(Task) ->
-    maps:fold(
-        fun
-            (_, null, Acc) -> Acc;
-            (<<"task_id">>, TaskId, Acc) -> Acc#{task_id => TaskId};
-            (<<"process_id">>, ProcessId, Acc) -> Acc#{process_id => ProcessId};
-            (<<"task_type">>, TaskType, Acc) -> Acc#{task_type => TaskType};
-            (<<"status">>, Status, Acc) -> Acc#{status => Status};
-            (<<"scheduled_time">>, Ts, Acc) -> Acc#{scheduled_time => Ts};
-            (<<"running_time">>, Ts, Acc) -> Acc#{running_time => Ts};
-            (<<"args">>, Args, Acc) -> Acc#{args => Args};
-            (<<"metadata">>, MetaData, Acc) -> Acc#{metadata => MetaData};
-            (<<"idempotency_key">>, IdempotencyKey, Acc) -> Acc#{idempotency_key => IdempotencyKey};
-            (<<"response">>, Response, Acc) -> Acc#{response => Response};
-            (<<"blocked_task">>, BlockedTaskId, Acc) -> Acc#{blocked_task => BlockedTaskId};
-            (<<"last_retry_interval">>, LastRetryInterval, Acc) -> Acc#{last_retry_interval => LastRetryInterval};
-            (<<"attempts_count">>, AttemptsCount, Acc) -> Acc#{attempts_count => AttemptsCount};
-            (<<"context">>, Context, Acc) -> Acc#{context => Context};
-            (_, _, Acc) -> Acc
-        end,
-        #{},
-        Task
-    ).
-
-marshal_process(Process) ->
-    maps:fold(
-        fun
-            (_, null, Acc) -> Acc;
-            (<<"process_id">>, ProcessId, Acc) -> Acc#{process_id => ProcessId};
-            (<<"status">>, Status, Acc) -> Acc#{status => Status};
-            (<<"detail">>, Detail, Acc) -> Acc#{detail => Detail};
-            (<<"aux_state">>, AuxState, Acc) -> Acc#{aux_state => AuxState};
-            (<<"metadata">>, Meta, Acc) -> Acc#{metadata => Meta};
-            (<<"corrupted_by">>, CorruptedBy, Acc) -> Acc#{corrupted_by => CorruptedBy};
-            (_, _, Acc) -> Acc
-        end,
-        #{},
-        Process
-    ).
-
-marshal_event(Event) ->
-    maps:fold(
-        fun
-            (_, null, Acc) -> Acc;
-            (<<"process_id">>, ProcessId, Acc) -> Acc#{process_id => ProcessId};
-            (<<"task_id">>, TaskId, Acc) -> Acc#{task_id => TaskId};
-            (<<"event_id">>, EventId, Acc) -> Acc#{event_id => EventId};
-            (<<"timestamp">>, Ts, Acc) -> Acc#{timestamp => Ts};
-            (<<"metadata">>, MetaData, Acc) -> Acc#{metadata => MetaData};
-            (<<"payload">>, Payload, Acc) -> Acc#{payload => Payload};
-            (_, _, Acc) -> Acc
-        end,
-        #{},
-        Event
-    ).
-%%
 
 get_pool(internal, #{pool := Pool}) ->
     Pool;

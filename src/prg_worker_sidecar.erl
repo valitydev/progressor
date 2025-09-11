@@ -59,15 +59,15 @@ process(Pid, Deadline, #{namespace := NS} = NsOpts, {TaskType, _, _} = Request, 
     namespace_id(),
     task_result(),
     process(),
-    [event()],
+    process_state(),
     task()
 ) -> {ok, [task()]} | no_return().
-complete_and_continue(Pid, _Deadline, StorageOpts, NsId, TaskResult, Process, Events, Task) ->
+complete_and_continue(Pid, _Deadline, StorageOpts, NsId, TaskResult, Process, ProcessState, Task) ->
     %% Timeout = Deadline - erlang:system_time(millisecond),
     Fun = fun() ->
         gen_server:call(
             Pid,
-            {complete_and_continue, StorageOpts, NsId, TaskResult, Process, Events, Task},
+            {complete_and_continue, StorageOpts, NsId, TaskResult, Process, ProcessState, Task},
             infinity
         )
     end,
@@ -82,14 +82,14 @@ complete_and_continue(Pid, _Deadline, StorageOpts, NsId, TaskResult, Process, Ev
     namespace_id(),
     task_result(),
     process(),
-    [event()]
+    process_state()
 ) -> {ok, [task()]} | no_return().
-complete_and_suspend(Pid, _Deadline, StorageOpts, NsId, TaskResult, Process, Events) ->
+complete_and_suspend(Pid, _Deadline, StorageOpts, NsId, TaskResult, Process, ProcessState) ->
     %% Timeout = Deadline - erlang:system_time(millisecond),
     Fun = fun() ->
         gen_server:call(
             Pid,
-            {complete_and_suspend, StorageOpts, NsId, TaskResult, Process, Events},
+            {complete_and_suspend, StorageOpts, NsId, TaskResult, Process, ProcessState},
             infinity
         )
     end,
@@ -102,14 +102,14 @@ complete_and_suspend(Pid, _Deadline, StorageOpts, NsId, TaskResult, Process, Eve
     namespace_id(),
     task_result(),
     process(),
-    [event()]
+    process_state()
 ) -> {ok, [task()]} | no_return().
-complete_and_unlock(Pid, _Deadline, StorageOpts, NsId, TaskResult, Process, Events) ->
+complete_and_unlock(Pid, _Deadline, StorageOpts, NsId, TaskResult, Process, ProcessState) ->
     %% Timeout = Deadline - erlang:system_time(millisecond),
     Fun = fun() ->
         gen_server:call(
             Pid,
-            {complete_and_unlock, StorageOpts, NsId, TaskResult, Process, Events},
+            {complete_and_unlock, StorageOpts, NsId, TaskResult, Process, ProcessState},
             infinity
         )
     end,
@@ -144,13 +144,13 @@ remove_process(Pid, _Deadline, StorageOpts, NsId, ProcessId) ->
     {ok, process()} | {error, _Reason}.
 get_process(Pid, _Deadline, StorageOpts, NsId, ProcessId) ->
     %% Timeout = Deadline - erlang:system_time(millisecond),
-    gen_server:call(Pid, {get_process, StorageOpts, NsId, ProcessId, #{}}, infinity).
+    gen_server:call(Pid, {get_process, StorageOpts, NsId, ProcessId, latest}, infinity).
 
--spec get_process(pid(), timestamp_ms(), storage_opts(), namespace_id(), id(), history_range()) ->
+-spec get_process(pid(), timestamp_ms(), storage_opts(), namespace_id(), id(), generation()) ->
     {ok, process()} | {error, _Reason}.
-get_process(Pid, _Deadline, StorageOpts, NsId, ProcessId, HistoryRange) ->
+get_process(Pid, _Deadline, StorageOpts, NsId, ProcessId, Generation) ->
     %% Timeout = Deadline - erlang:system_time(millisecond),
-    gen_server:call(Pid, {get_process, StorageOpts, NsId, ProcessId, HistoryRange}, infinity).
+    gen_server:call(Pid, {get_process, StorageOpts, NsId, ProcessId, Generation}, infinity).
 
 -spec get_task(pid(), timestamp_ms(), storage_opts(), namespace_id(), task_id()) ->
     {ok, task()} | {error, _Reason}.
@@ -195,12 +195,12 @@ handle_call(
         end,
     {reply, Response, State};
 handle_call(
-    {complete_and_continue, StorageOpts, NsId, TaskResult, Process, Events, Task},
+    {complete_and_continue, StorageOpts, NsId, TaskResult, Process, ProcessState, Task},
     _From,
     #prg_sidecar_state{} = State
 ) ->
     Fun = fun() ->
-        prg_storage:complete_and_continue(StorageOpts, NsId, TaskResult, Process, Events, Task)
+        prg_storage:complete_and_continue(StorageOpts, NsId, TaskResult, Process, ProcessState, Task)
     end,
     Response = do_with_retry(Fun, ?DEFAULT_DELAY),
     {reply, Response, State};
@@ -235,22 +235,22 @@ handle_call(
     Response = do_with_retry(Fun, ?DEFAULT_DELAY),
     {reply, Response, State};
 handle_call(
-    {complete_and_suspend, StorageOpts, NsId, TaskResult, Process, Events},
+    {complete_and_suspend, StorageOpts, NsId, TaskResult, Process, ProcessState},
     _From,
     #prg_sidecar_state{} = State
 ) ->
     Fun = fun() ->
-        prg_storage:complete_and_suspend(StorageOpts, NsId, TaskResult, Process, Events)
+        prg_storage:complete_and_suspend(StorageOpts, NsId, TaskResult, Process, ProcessState)
     end,
     Response = do_with_retry(Fun, ?DEFAULT_DELAY),
     {reply, Response, State};
 handle_call(
-    {complete_and_unlock, StorageOpts, NsId, TaskResult, Process, Events},
+    {complete_and_unlock, StorageOpts, NsId, TaskResult, Process, ProcessState},
     _From,
     #prg_sidecar_state{} = State
 ) ->
     Fun = fun() ->
-        prg_storage:complete_and_unlock(StorageOpts, NsId, TaskResult, Process, Events)
+        prg_storage:complete_and_unlock(StorageOpts, NsId, TaskResult, Process, ProcessState)
     end,
     Response = do_with_retry(Fun, ?DEFAULT_DELAY),
     {reply, Response, State};

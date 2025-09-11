@@ -9,7 +9,6 @@
 -export([prepare_init/4]).
 -export([prepare_call/4]).
 -export([prepare_repair/4]).
--export([put_process_data/4]).
 
 %% scan functions
 -export([search_timers/4]).
@@ -54,16 +53,6 @@ get_task_result(#{client := Handler, options := HandlerOpts}, NsId, KeyOrId) ->
 get_process_status(#{client := Handler, options := HandlerOpts}, NsId, Id) ->
     Handler:get_process_status(HandlerOpts, NsId, Id).
 
--spec put_process_data(
-    storage_opts(),
-    namespace_id(),
-    id(),
-    #{process := process(), init_task => task(), active_task => task()}
-) ->
-    {ok, _Result} | {error, _Reason}.
-put_process_data(#{client := Handler, options := HandlerOpts}, NsId, Id, ProcessData) ->
-    Handler:put_process_data(HandlerOpts, NsId, Id, ProcessData).
-
 -spec prepare_init(storage_opts(), namespace_id(), id(), task()) ->
     {ok, {postpone, task_id()} | {continue, task_id()}} | {error, _Reason}.
 prepare_init(#{client := Handler, options := HandlerOpts}, NsId, ProcessId, InitTask) ->
@@ -101,31 +90,31 @@ collect_zombies(#{client := Handler, options := HandlerOpts}, NsId, Timeout) ->
 %%%%%%%%%%%%%%%%%%%
 
 -spec complete_and_continue(
-    storage_opts(), namespace_id(), task_result(), process(), [event()], task()
+    storage_opts(), namespace_id(), task_result(), process(), process_state(), task()
 ) ->
     {ok, [task()]}.
 complete_and_continue(
-    #{client := Handler, options := HandlerOpts}, NsId, TaskResult, Process, Events, NextTask
+    #{client := Handler, options := HandlerOpts}, NsId, TaskResult, Process, ProcessState, NextTask
 ) ->
-    Handler:complete_and_continue(HandlerOpts, NsId, TaskResult, Process, Events, NextTask).
+    Handler:complete_and_continue(HandlerOpts, NsId, TaskResult, Process, ProcessState, NextTask).
 
--spec complete_and_suspend(storage_opts(), namespace_id(), task_result(), process(), [event()]) ->
+-spec complete_and_suspend(storage_opts(), namespace_id(), task_result(), process(), process_state()) ->
     {ok, [task()]}.
 complete_and_suspend(
-    #{client := Handler, options := HandlerOpts}, NsId, TaskResult, Process, Events
+    #{client := Handler, options := HandlerOpts}, NsId, TaskResult, Process, ProcessState
 ) ->
-    Handler:complete_and_suspend(HandlerOpts, NsId, TaskResult, Process, Events).
+    Handler:complete_and_suspend(HandlerOpts, NsId, TaskResult, Process, ProcessState).
 
 -spec complete_and_error(storage_opts(), namespace_id(), task_result(), process()) -> ok.
 complete_and_error(#{client := Handler, options := HandlerOpts}, NsId, TaskResult, Process) ->
     Handler:complete_and_error(HandlerOpts, NsId, TaskResult, Process).
 
--spec complete_and_unlock(storage_opts(), namespace_id(), task_result(), process(), [event()]) ->
+-spec complete_and_unlock(storage_opts(), namespace_id(), task_result(), process(), process_state()) ->
     {ok, [task()]}.
 complete_and_unlock(
-    #{client := Handler, options := HandlerOpts}, NsId, TaskResult, Process, Events
+    #{client := Handler, options := HandlerOpts}, NsId, TaskResult, Process, ProcessState
 ) ->
-    Handler:complete_and_unlock(HandlerOpts, NsId, TaskResult, Process, Events).
+    Handler:complete_and_unlock(HandlerOpts, NsId, TaskResult, Process, ProcessState).
 
 -spec remove_process(storage_opts(), namespace_id(), id()) -> ok | no_return().
 remove_process(#{client := Handler, options := HandlerOpts}, NsId, ProcessId) ->
@@ -146,23 +135,23 @@ get_task(Recipient, #{client := Handler, options := HandlerOpts}, NsId, TaskId) 
 
 -spec get_process(storage_opts(), namespace_id(), id()) -> {ok, process()} | {error, _Reason}.
 get_process(StorageOpts, NsId, ProcessId) ->
-    get_process(internal, StorageOpts, NsId, ProcessId, #{}).
+    get_process(internal, StorageOpts, NsId, ProcessId, latest).
 
 -spec get_process(
     storage_opts() | recipient(),
     namespace_id() | storage_opts(),
     id() | namespace_id(),
-    history_range() | id()
+    generation() | id()
 ) -> {ok, process()} | {error, _Reason}.
-get_process(StorageOpts, NsId, ProcessId, HistoryRange) when is_map(StorageOpts) ->
-    get_process(internal, StorageOpts, NsId, ProcessId, HistoryRange);
+get_process(StorageOpts, NsId, ProcessId, Generation) when is_map(StorageOpts) ->
+    get_process(internal, StorageOpts, NsId, ProcessId, Generation);
 get_process(Recipient, StorageOpts, NsId, ProcessId) when is_atom(Recipient) ->
-    get_process(Recipient, StorageOpts, NsId, ProcessId, #{}).
+    get_process(Recipient, StorageOpts, NsId, ProcessId, latest).
 
--spec get_process(recipient(), storage_opts(), namespace_id(), id(), history_range()) ->
+-spec get_process(recipient(), storage_opts(), namespace_id(), id(), generation()) ->
     {ok, process()} | {error, _Reason}.
-get_process(Recipient, #{client := Handler, options := HandlerOpts}, NsId, ProcessId, HistoryRange) ->
-    Handler:get_process(Recipient, HandlerOpts, NsId, ProcessId, HistoryRange).
+get_process(Recipient, #{client := Handler, options := HandlerOpts}, NsId, ProcessId, Generation) ->
+    Handler:get_process(Recipient, HandlerOpts, NsId, ProcessId, Generation).
 
 %%%
 

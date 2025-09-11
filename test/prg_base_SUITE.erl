@@ -15,7 +15,7 @@
 %% Tests
 -export([simple_timers_test/1]).
 -export([simple_call_test/1]).
--export([simple_call_with_range_test/1]).
+-export([simple_call_with_generation_test/1]).
 -export([call_replace_timer_test/1]).
 -export([call_unset_timer_test/1]).
 -export([postponed_call_test/1]).
@@ -27,13 +27,22 @@
 -export([repair_after_call_error_test/1]).
 -export([remove_by_timer_test/1]).
 -export([remove_without_timer_test/1]).
--export([put_process_test/1]).
--export([put_process_zombie_test/1]).
--export([put_process_with_timeout_test/1]).
--export([put_process_with_remove_test/1]).
 
 -define(NS(C), proplists:get_value(ns_id, C, 'default/default')).
 -define(AWAIT_TIMEOUT(C), proplists:get_value(repl_timeout, C, 0)).
+-define(PROCESS_EXPECTED(Id, StateGeneration, CurrentGeneration, Status), #{
+    status := Status,
+    state := #{
+        timestamp := _,
+        metadata := #{<<"format_version">> := 1},
+        process_id := Id,
+        task_id := _,
+        generation := StateGeneration,
+        payload := _
+    },
+    process_id := Id,
+    current_generation := CurrentGeneration
+}).
 
 init_per_suite(Config) ->
     Config.
@@ -60,7 +69,7 @@ groups() ->
         {base, [], [
             simple_timers_test,
             simple_call_test,
-            simple_call_with_range_test,
+            simple_call_with_generation_test,
             call_replace_timer_test,
             call_unset_timer_test,
             postponed_call_test,
@@ -71,11 +80,7 @@ groups() ->
             error_after_max_retries_test,
             repair_after_call_error_test,
             remove_by_timer_test,
-            remove_without_timer_test,
-            put_process_test,
-            put_process_zombie_test,
-            put_process_with_timeout_test,
-            put_process_with_remove_test
+            remove_without_timer_test
         ]},
         {cache, [], [
             {group, base}
@@ -85,10 +90,10 @@ groups() ->
 -spec simple_timers_test(_) -> _.
 simple_timers_test(C) ->
     %% steps:
-    %%    step       aux_state   events    action
-    %% 1. init ->    aux_state1, [event1], timer 2s
-    %% 2. timeout -> aux_state2, [event2], timer 0s
-    %% 3. timeout -> undefined,  [],       undefined
+    %%    step       aux_state   state    action
+    %% 1. init ->    aux_state1, state1, timer 2s
+    %% 2. timeout -> aux_state2, state2, timer 0s
+    %% 3. timeout -> undefined,  state3, undefined
     _ = mock_processor(simple_timers_test),
     Id = gen_id(),
     {ok, ok} = progressor:init(#{ns => ?NS(C), id => Id, args => <<"init_args">>}),
@@ -96,24 +101,19 @@ simple_timers_test(C) ->
     ExpectedAux = erlang:term_to_binary(<<"aux_state2">>),
     timer:sleep(?AWAIT_TIMEOUT(C)),
     {ok, #{
-        process_id := Id,
         status := <<"running">>,
-        aux_state := ExpectedAux,
+        state := #{
+            timestamp := _,
+            metadata := #{<<"format_version">> := 1},
+            process_id := Id,
+            task_id := _,
+            generation := 3,
+            payload := _
+        },
         metadata := #{<<"k">> := <<"v">>},
-        history := [
-            #{
-                event_id := 1,
-                metadata := #{<<"format_version">> := 1},
-                payload := _Pl1,
-                timestamp := _Ts1
-            },
-            #{
-                event_id := 2,
-                metadata := #{<<"format_version">> := 1},
-                payload := _Pl2,
-                timestamp := _Ts2
-            }
-        ]
+        process_id := Id,
+        aux_state := ExpectedAux,
+        current_generation := 3
     }} = progressor:get(#{ns => ?NS(C), id => Id}),
     unmock_processor(),
     ok.
@@ -121,9 +121,9 @@ simple_timers_test(C) ->
 -spec simple_call_test(_) -> _.
 simple_call_test(C) ->
     %% steps:
-    %% 1. init ->    [event1], timer 2s
-    %% 2. call ->    [event2], undefined (duration 3s)
-    %% 3. timeout -> [event3], undefined
+    %% 1. init ->    state1, timer 2s
+    %% 2. call ->    state2, undefined (duration 3s)
+    %% 3. timeout -> state3, undefined
     _ = mock_processor(simple_call_test),
     Id = gen_id(),
     {ok, ok} = progressor:init(#{ns => ?NS(C), id => Id, args => <<"init_args">>}),
@@ -131,92 +131,80 @@ simple_call_test(C) ->
     3 = expect_steps_counter(3),
     timer:sleep(?AWAIT_TIMEOUT(C)),
     {ok, #{
-        process_id := Id,
         status := <<"running">>,
-        history := [
-            #{
-                event_id := 1,
-                metadata := #{<<"format_version">> := 1},
-                payload := _Pl1,
-                timestamp := _Ts1
-            },
-            #{
-                event_id := 2,
-                metadata := #{<<"format_version">> := 1},
-                payload := _Pl2,
-                timestamp := _Ts2
-            },
-            #{
-                event_id := 3,
-                metadata := #{<<"format_version">> := 1},
-                payload := _Pl3,
-                timestamp := _Ts3
-            }
-        ]
+        state := #{
+            timestamp := _,
+            metadata := #{<<"format_version">> := 1},
+            process_id := Id,
+            task_id := _,
+            generation := 3,
+            payload := _
+        },
+        process_id := Id,
+        current_generation := 3
     }} = progressor:get(#{ns => ?NS(C), id => Id}),
     unmock_processor(),
     ok.
 %%
--spec simple_call_with_range_test(_) -> _.
-simple_call_with_range_test(C) ->
+-spec simple_call_with_generation_test(_) -> _.
+simple_call_with_generation_test(C) ->
     %% steps:
-    %% 1. init ->    [event1, event2, event3, event4], timer 2s
-    %% 2. call range limit 2 offset 1 ->    [event5], timer 0s
-    %% 2. call range limit 2 offset 5 back -> [event6], timer 0s
-    %% 3. timeout -> [event7], undefined
-    _ = mock_processor(simple_call_with_range_test),
+    %% 1. init              -> state1, timer 2s
+    %% 2. call generation 1 -> state2, timer 0s
+    %% 2. call generation 1 -> state3, timer 0s
+    %% 3. timeout           -> state4, undefined
+    _ = mock_processor(simple_call_with_generation_test),
     Id = gen_id(),
     {ok, ok} = progressor:init(#{ns => ?NS(C), id => Id, args => <<"init_args">>}),
     {ok, <<"response">>} = progressor:call(#{
         ns => ?NS(C),
         id => Id,
         args => <<"call_args">>,
-        range => #{offset => 1, limit => 2}
+        generation => 1
     }),
     {ok, <<"response">>} = progressor:call(#{
         ns => ?NS(C),
         id => Id,
         args => <<"call_args_back">>,
-        range => #{offset => 5, limit => 2, direction => backward}
+        generation => 1
     }),
     4 = expect_steps_counter(4),
     timer:sleep(?AWAIT_TIMEOUT(C)),
     {ok, #{
-        process_id := Id,
         status := <<"running">>,
-        history := [
-            #{event_id := 1},
-            #{event_id := 2},
-            #{event_id := 3},
-            #{event_id := 4},
-            #{event_id := 5},
-            #{event_id := 6},
-            #{event_id := 7}
-        ]
+        state := #{
+            timestamp := _,
+            metadata := #{<<"format_version">> := 1},
+            process_id := Id,
+            task_id := _,
+            generation := 4,
+            payload := _
+        },
+        process_id := Id,
+        current_generation := 4
     }} = progressor:get(#{ns => ?NS(C), id => Id}),
     {ok, #{
-        process_id := Id,
         status := <<"running">>,
-        range := #{offset := 6, direction := backward},
-        last_event_id := 7,
-        history := [
-            #{event_id := 5},
-            #{event_id := 4},
-            #{event_id := 3},
-            #{event_id := 2},
-            #{event_id := 1}
-        ]
-    }} = progressor:get(#{ns => ?NS(C), id => Id, range => #{offset => 6, direction => backward}}),
+        state := #{
+            timestamp := _,
+            metadata := #{<<"format_version">> := 1},
+            process_id := Id,
+            task_id := _,
+            generation := 2,
+            payload := _
+        },
+        process_id := Id,
+        current_generation := 4
+    }} = progressor:get(#{ns => ?NS(C), id => Id, generation => 2}),
     unmock_processor(),
     ok.
 %%
-
 -spec call_replace_timer_test(_) -> _.
 call_replace_timer_test(C) ->
     %% steps:
-    %% 1. init ->    [event1], timer 2s + remove
-    %% 2. call ->    [],       timer 0s (new timer cancel remove)
-    %% 3. timeout -> [event2], undefined
+    %% 1. init ->    state1, timer 2s + remove
+    %% 2. call ->    state2,       timer 0s (new timer cancel remove)
+    %% 3. timeout -> state3, undefined
     _ = mock_processor(call_replace_timer_test),
     Id = gen_id(),
     {ok, ok} = progressor:init(#{ns => ?NS(C), id => Id, args => <<"init_args">>}),
@@ -225,22 +213,17 @@ call_replace_timer_test(C) ->
     %% wait task_scan_timeout, maybe remove works
     timer:sleep(4000),
     {ok, #{
-        process_id := Id,
         status := <<"running">>,
-        history := [
-            #{
-                event_id := 1,
-                metadata := #{<<"format_version">> := 1},
-                payload := _Pl1,
-                timestamp := _Ts1
-            },
-            #{
-                event_id := 2,
-                metadata := #{<<"format_version">> := 1},
-                payload := _Pl2,
-                timestamp := _Ts2
-            }
-        ]
+        state := #{
+            timestamp := _,
+            metadata := #{<<"format_version">> := 1},
+            process_id := Id,
+            task_id := _,
+            generation := 3,
+            payload := _
+        },
+        process_id := Id,
+        current_generation := 3
     }} = progressor:get(#{ns => ?NS(C), id => Id}),
     unmock_processor(),
     ok.
@@ -248,7 +231,7 @@ call_replace_timer_test(C) ->
 -spec call_unset_timer_test(_) -> _.
 call_unset_timer_test(C) ->
     %% steps:
-    %% 1. init ->    [event1], timer 2s
+    %% 1. init ->    state1,   timer 2s
     %% 2. call ->    [],       unset_timer
     _ = mock_processor(call_unset_timer_test),
     Id = gen_id(),
@@ -258,16 +241,17 @@ call_unset_timer_test(C) ->
     2 = expect_steps_counter(3),
     timer:sleep(?AWAIT_TIMEOUT(C)),
     {ok, #{
-        process_id := Id,
         status := <<"running">>,
-        history := [
-            #{
-                event_id := 1,
-                metadata := #{<<"format_version">> := 1},
-                payload := _Pl1,
-                timestamp := _Ts1
-            }
-        ]
+        state := #{
+            timestamp := _,
+            metadata := #{<<"format_version">> := 1},
+            process_id := Id,
+            task_id := _,
+            generation := 2,
+            payload := _
+        },
+        process_id := Id,
+        current_generation := 2
     }} = progressor:get(#{ns => ?NS(C), id => Id}),
     unmock_processor(),
     ok.
@@ -276,10 +260,10 @@ call_unset_timer_test(C) ->
 postponed_call_test(C) ->
     %% call between 0 sec timers
     %% steps:
-    %% 1. init ->    [],       timer 0s
-    %% 2. timeout -> [event1], timer 0s (process duration 3000)
-    %% 3. call ->    [event2], undefined
-    %% 4. timeout -> [event3], undefined
+    %% 1. init ->    state1,    timer 0s
+    %% 2. timeout -> state2,    timer 0s (process duration 3000)
+    %% 3. call ->    state3,    undefined
+    %% 4. timeout -> state4,    undefined
     _ = mock_processor(postponed_call_test),
     Id = gen_id(),
     {ok, ok} = progressor:init(#{ns => ?NS(C), id => Id, args => <<"init_args">>}),
@@ -287,74 +271,44 @@ postponed_call_test(C) ->
     4 = expect_steps_counter(4),
     timer:sleep(?AWAIT_TIMEOUT(C)),
     {ok, #{
-        process_id := Id,
         status := <<"running">>,
-        history := [
-            #{
-                event_id := 1,
-                metadata := #{<<"format_version">> := 1},
-                payload := _Pl1,
-                timestamp := _Ts1
-            },
-            #{
-                event_id := 2,
-                metadata := #{<<"format_version">> := 1},
-                payload := _Pl2,
-                timestamp := _Ts2
-            },
-            #{
-                event_id := 3,
-                metadata := #{<<"format_version">> := 1},
-                payload := _Pl3,
-                timestamp := _Ts3
-            }
-        ]
+        state := #{
+            timestamp := _,
+            metadata := #{<<"format_version">> := 1},
+            process_id := Id,
+            task_id := _,
+            generation := 4,
+            payload := _
+        },
+        process_id := Id,
+        current_generation := 4
     }} = progressor:get(#{ns => ?NS(C), id => Id}),
     unmock_processor(),
     ok.
 %%
 -spec postponed_call_to_suspended_process_test(_) -> _.
 postponed_call_to_suspended_process_test(C) ->
-    %% call between 0 sec timers
     %% steps:
-    %% 1. init ->    [],       timer 0s
-    %% 2. timeout -> [event1], undefined (process duration 3000)
-    %% 3. call ->    [event2], undefined
+    %% 1. init ->    state1, timer 0s
+    %% 2. timeout -> state2, undefined (process duration 3000)
+    %% 3. call ->    state3, undefined
     _ = mock_processor(postponed_call_to_suspended_process_test),
     Id = gen_id(),
     {ok, ok} = progressor:init(#{ns => ?NS(C), id => Id, args => <<"init_args">>}),
     {ok, <<"response">>} = progressor:call(#{ns => ?NS(C), id => Id, args => <<"call_args">>}),
     3 = expect_steps_counter(3),
     timer:sleep(?AWAIT_TIMEOUT(C)),
-    {ok, #{
-        process_id := Id,
-        status := <<"running">>,
-        history := [
-            #{
-                event_id := 1,
-                metadata := #{<<"format_version">> := 1},
-                payload := _Pl1,
-                timestamp := _Ts1
-            },
-            #{
-                event_id := 2,
-                metadata := #{<<"format_version">> := 1},
-                payload := _Pl2,
-                timestamp := _Ts2
-            }
-        ]
-    }} = progressor:get(#{ns => ?NS(C), id => Id}),
+    {ok, ?PROCESS_EXPECTED(Id, 3, 3, <<"running">>)} = progressor:get(#{ns => ?NS(C), id => Id}),
     unmock_processor(),
     ok.
 %%
 -spec multiple_calls_test(_) -> _.
 multiple_calls_test(C) ->
-    %% call between 0 sec timers
     %% steps:
-    %% 1.  init ->    [],        undefined
-    %% 2.  call ->    [event1],  undefined
+    %% 1.  init ->    state1,  undefined
+    %% 2.  call ->    state2,  undefined
     %% ...
-    %% 11. call ->    [event10], undefined
+    %% 11. call ->    state11, undefined
     _ = mock_processor(multiple_calls_test),
     Id = gen_id(),
     {ok, ok} = progressor:init(#{ns => ?NS(C), id => Id, args => <<"init_args">>}),
@@ -366,117 +320,71 @@ multiple_calls_test(C) ->
     ),
     11 = expect_steps_counter(33),
     timer:sleep(?AWAIT_TIMEOUT(C)),
-    {ok, #{
-        process_id := Id,
-        status := <<"running">>,
-        history := [
-            #{event_id := 1},
-            #{event_id := 2},
-            #{event_id := 3},
-            #{event_id := 4},
-            #{event_id := 5},
-            #{event_id := 6},
-            #{event_id := 7},
-            #{event_id := 8},
-            #{event_id := 9},
-            #{event_id := 10}
-        ]
-    }} = progressor:get(#{ns => ?NS(C), id => Id}),
+    {ok, ?PROCESS_EXPECTED(Id, 11, 11, <<"running">>)} = progressor:get(#{ns => ?NS(C), id => Id}),
     unmock_processor(),
     ok.
 
 -spec simple_repair_after_non_retriable_error_test(_) -> _.
 simple_repair_after_non_retriable_error_test(C) ->
     %% steps:
-    %% 1. init                            -> [],       timer 0s
+    %% 1. init                            -> state1, timer 0s
     %% 2. timeout                         -> {error, do_not_retry}
-    %% 3. timeout(via simple repair call) -> [event1], undefined
-    %% 4. timeout                         -> [event2], undefined
+    %% 3. timeout(via simple repair call) -> state2, undefined
+    %% 4. timeout                         -> state3, undefined
     _ = mock_processor(simple_repair_after_non_retriable_error_test),
     Id = gen_id(),
     {ok, ok} = progressor:init(#{ns => ?NS(C), id => Id, args => <<"init_args">>}),
     2 = expect_steps_counter(2),
     timer:sleep(?AWAIT_TIMEOUT(C)),
     {ok, #{
-        detail := <<"do_not_retry">>,
-        history := [],
+        status := <<"error">>,
+        state := #{generation := 1},
         process_id := Id,
-        status := <<"error">>
+        current_generation := 1,
+        detail := <<"do_not_retry">>,
+        corrupted_by := _
     }} = progressor:get(#{ns => ?NS(C), id => Id}),
     {ok, ok} = progressor:simple_repair(#{ns => ?NS(C), id => Id, context => <<"simple_repair_ctx">>}),
     4 = expect_steps_counter(4),
     timer:sleep(?AWAIT_TIMEOUT(C)),
-    {ok,
-        #{
-            process_id := Id,
-            status := <<"running">>,
-            history := [
-                #{
-                    event_id := 1,
-                    metadata := #{<<"format_version">> := 1},
-                    payload := _Pl1,
-                    timestamp := _Ts1
-                },
-                #{
-                    event_id := 2,
-                    metadata := #{<<"format_version">> := 1},
-                    payload := _Pl2,
-                    timestamp := _Ts2
-                }
-            ]
-        } = Process} = progressor:get(#{ns => ?NS(C), id => Id}),
+    {ok, ?PROCESS_EXPECTED(Id, 3, 3, <<"running">>) = Process} = progressor:get(#{ns => ?NS(C), id => Id}),
     false = erlang:is_map_key(detail, Process),
+    false = erlang:is_map_key(corrupted_by, Process),
     unmock_processor(),
     ok.
 
 -spec repair_after_non_retriable_error_test(_) -> _.
 repair_after_non_retriable_error_test(C) ->
     %% steps:
-    %% 1. init ->    [],       timer 0s
+    %% 1. init ->    state1, timer 0s
     %% 2. timeout -> {error, do_not_retry}
-    %% 3. repair ->  [event1], undefined
-    %% 4. timeout -> [event2], undefined
+    %% 3. repair ->  state2, undefined
     _ = mock_processor(repair_after_non_retriable_error_test),
     Id = gen_id(),
     {ok, ok} = progressor:init(#{ns => ?NS(C), id => Id, args => <<"init_args">>}),
     2 = expect_steps_counter(2),
     timer:sleep(?AWAIT_TIMEOUT(C)),
     {ok, #{
-        detail := <<"do_not_retry">>,
-        history := [],
+        status := <<"error">>,
+        state := #{generation := 1},
         process_id := Id,
-        status := <<"error">>
+        current_generation := 1,
+        detail := <<"do_not_retry">>,
+        corrupted_by := _
     }} = progressor:get(#{ns => ?NS(C), id => Id}),
     {ok, ok} = progressor:repair(#{ns => ?NS(C), id => Id, args => <<"repair_args">>}),
-    4 = expect_steps_counter(4),
+    3 = expect_steps_counter(4),
     timer:sleep(?AWAIT_TIMEOUT(C)),
-    {ok,
-        #{
-            process_id := Id,
-            status := <<"running">>,
-            history := [
-                #{
-                    event_id := 1,
-                    metadata := #{<<"format_version">> := 1},
-                    payload := _Pl1,
-                    timestamp := _Ts1
-                },
-                #{
-                    event_id := 2,
-                    metadata := #{<<"format_version">> := 1},
-                    payload := _Pl2,
-                    timestamp := _Ts2
-                }
-            ]
-        } = Process} = progressor:get(#{ns => ?NS(C), id => Id}),
+    {ok, ?PROCESS_EXPECTED(Id, 2, 2, <<"running">>) = Process} = progressor:get(#{ns => ?NS(C), id => Id}),
     false = erlang:is_map_key(detail, Process),
+    false = erlang:is_map_key(corrupted_by, Process),
     unmock_processor(),
     ok.
 %%
 -spec error_after_max_retries_test(_) -> _.
 error_after_max_retries_test(C) ->
     %% steps:
-    %% 1. init ->    [],       timer 0s
+    %% 1. init ->    state1, timer 0s
     %% 2. timeout -> {error, retry_this}
     %% 3. timeout -> {error, retry_this}
     %% 4. timeout -> {error, retry_this}
@@ -486,10 +394,12 @@ error_after_max_retries_test(C) ->
     4 = expect_steps_counter(4),
     timer:sleep(?AWAIT_TIMEOUT(C)),
     {ok, #{
-        detail := <<"retry_this">>,
-        history := [],
+        status := <<"error">>,
+        state := #{generation := 1},
         process_id := Id,
-        status := <<"error">>
+        current_generation := 1,
+        detail := <<"retry_this">>,
+        corrupted_by := _
     }} = progressor:get(#{ns => ?NS(C), id => Id}),
     unmock_processor(),
     ok.
@@ -508,11 +418,12 @@ repair_after_call_error_test(C) ->
     2 = expect_steps_counter(2),
     timer:sleep(?AWAIT_TIMEOUT(C)),
     {ok, #{
-        detail := <<"retry_this">>,
-        metadata := #{<<"k">> := <<"v">>},
-        history := [],
+        status := <<"error">>,
+        state := #{generation := 1},
         process_id := Id,
-        status := <<"error">>
+        current_generation := 1,
+        detail := <<"retry_this">>,
+        corrupted_by := CorruptionTask
     }} = progressor:get(#{ns => ?NS(C), id => Id}),
     {error, <<"repair_error">>} = progressor:repair(#{
         ns => ?NS(C), id => Id, args => <<"bad_repair_args">>
@@ -521,57 +432,32 @@ repair_after_call_error_test(C) ->
     timer:sleep(?AWAIT_TIMEOUT(C)),
     %% shoul not rewrite detail
     {ok, #{
-        detail := <<"retry_this">>,
-        metadata := #{<<"k">> := <<"v">>},
-        history := [],
+        status := <<"error">>,
+        state := #{generation := 1},
         process_id := Id,
-        status := <<"error">>
+        current_generation := 1,
+        detail := <<"retry_this">>,
+        corrupted_by := CorruptionTask
     }} = progressor:get(#{ns => ?NS(C), id => Id}),
     {ok, ok} = progressor:repair(#{ns => ?NS(C), id => Id, args => <<"repair_args">>}),
     4 = expect_steps_counter(4),
     timer:sleep(?AWAIT_TIMEOUT(C)),
-    {ok, #{
-        process_id := Id,
-        status := <<"running">>,
-        metadata := #{<<"k2">> := <<"v2">>},
-        history := [
-            #{
-                event_id := 1,
-                metadata := #{<<"format_version">> := 1},
-                payload := _Pl1,
-                timestamp := _Ts1
-            }
-        ]
-    }} = progressor:get(#{ns => ?NS(C), id => Id}),
+    {ok, ?PROCESS_EXPECTED(Id, 2, 2, <<"running">>) = Process} = progressor:get(#{ns => ?NS(C), id => Id}),
+    false = erlang:is_map_key(detail, Process),
+    false = erlang:is_map_key(corrupted_by, Process),
+    ?assertEqual(#{<<"k2">> => <<"v2">>}, maps:get(metadata, Process)),
     unmock_processor(),
     ok.
 %%
 -spec remove_by_timer_test(_) -> _.
 remove_by_timer_test(C) ->
     %% steps:
-    %% 1. init -> [event1, event2], timer 2s + remove
+    %% 1. init -> state1, timer 2s + remove
     _ = mock_processor(remove_by_timer_test),
     Id = gen_id(),
     {ok, ok} = progressor:init(#{ns => ?NS(C), id => Id, args => <<"init_args">>}),
     timer:sleep(?AWAIT_TIMEOUT(C)),
-    {ok, #{
-        process_id := Id,
-        status := <<"running">>,
-        history := [
-            #{
-                event_id := 1,
-                metadata := #{<<"format_version">> := 1},
-                payload := _Pl1,
-                timestamp := _Ts1
-            },
-            #{
-                event_id := 2,
-                metadata := #{<<"format_version">> := 1},
-                payload := _Pl2,
-                timestamp := _Ts2
-            }
-        ]
-    }} = progressor:get(#{ns => ?NS(C), id => Id}),
+    {ok, ?PROCESS_EXPECTED(Id, 1, 1, <<"running">>)} = progressor:get(#{ns => ?NS(C), id => Id}),
     %% wait tsk_scan_timeout
     timer:sleep(4000),
     {error, <<"process not found">>} = progressor:get(#{ns => ?NS(C), id => Id}),
@@ -581,199 +467,17 @@ remove_by_timer_test(C) ->
 -spec remove_without_timer_test(_) -> _.
 remove_without_timer_test(C) ->
     %% steps:
-    %% 1. init -> [event1], timer 2s
-    %% 2. timeout -> [],    remove
+    %% 1. init -> state1, timer 2s
+    %% 2. timeout -> state2,    remove
     _ = mock_processor(remove_without_timer_test),
     Id = gen_id(),
     {ok, ok} = progressor:init(#{ns => ?NS(C), id => Id, args => <<"init_args">>}),
     timer:sleep(?AWAIT_TIMEOUT(C)),
-    {ok, #{
-        process_id := Id,
-        status := <<"running">>,
-        history := [
-            #{
-                event_id := 1,
-                metadata := #{<<"format_version">> := 1},
-                payload := _Pl1,
-                timestamp := _Ts1
-            }
-        ]
-    }} = progressor:get(#{ns => ?NS(C), id => Id}),
+    {ok, ?PROCESS_EXPECTED(Id, 1, 1, <<"running">>)} = progressor:get(#{ns => ?NS(C), id => Id}),
     2 = expect_steps_counter(2),
     timer:sleep(?AWAIT_TIMEOUT(C)),
     {error, <<"process not found">>} = progressor:get(#{ns => ?NS(C), id => Id}),
     unmock_processor(),
-    ok.
-%%
--spec put_process_test(_) -> _.
-put_process_test(C) ->
-    Id = gen_id(),
-    Args = #{
-        process => #{
-            process_id => Id,
-            status => <<"running">>,
-            history => [
-                event(1),
-                event(2),
-                event(3)
-            ]
-        }
-    },
-    {ok, ok} = progressor:put(#{ns => ?NS(C), id => Id, args => Args}),
-    timer:sleep(?AWAIT_TIMEOUT(C)),
-    {ok, #{
-        process_id := Id,
-        status := <<"running">>,
-        history := [
-            #{
-                metadata := #{<<"format_version">> := 1},
-                process_id := Id,
-                event_id := 1,
-                timestamp := _Ts1,
-                payload := _Pl1
-            },
-            #{
-                timestamp := _Ts2,
-                metadata := #{<<"format_version">> := 1},
-                process_id := Id,
-                event_id := 2,
-                payload := _Pl2
-            },
-            #{
-                timestamp := _Ts3,
-                metadata := #{<<"format_version">> := 1},
-                process_id := Id,
-                event_id := 3,
-                payload := _Pl3
-            }
-        ]
-    }} = progressor:get(#{ns => ?NS(C), id => Id}),
-
-    {error, <<"process already exists">>} = progressor:put(#{ns => ?NS(C), id => Id, args => Args}),
-    ok.
-%%
--spec put_process_with_timeout_test(_) -> _.
-put_process_with_timeout_test(C) ->
-    %% steps:
-    %% 1. put     -> [event1], timer 1s
-    %% 2. timeout -> [event2], undefined
-    _ = mock_processor(put_process_with_timeout_test),
-    Id = gen_id(),
-    Args = #{
-        process => #{
-            process_id => Id,
-            status => <<"running">>,
-            history => [event(1)]
-        },
-        action => #{set_timer => erlang:system_time(second) + 1}
-    },
-    {ok, ok} = progressor:put(#{ns => ?NS(C), id => Id, args => Args}),
-    timer:sleep(?AWAIT_TIMEOUT(C)),
-    {ok, #{
-        process_id := Id,
-        status := <<"running">>,
-        history := [#{event_id := 1}]
-    }} = progressor:get(#{ns => ?NS(C), id => Id}),
-    1 = expect_steps_counter(1),
-    timer:sleep(?AWAIT_TIMEOUT(C)),
-    {ok, #{
-        process_id := Id,
-        status := <<"running">>,
-        history := [#{event_id := 1}, #{event_id := 2}]
-    }} = progressor:get(#{ns => ?NS(C), id => Id}),
-    unmock_processor(),
-    ok.
-%%
--spec put_process_zombie_test(_) -> _.
-put_process_zombie_test(C) ->
-    %% steps:
-    %% 1. put     -> [event1], timer 1s
-    %% 2. insert running task from past
-    %% 3. zombie collecttion
-    Id = gen_id(),
-    Args = #{
-        process => #{
-            process_id => Id,
-            status => <<"running">>,
-            history => [event(1)]
-        }
-    },
-    {ok, ok} = progressor:put(#{ns => ?NS(C), id => Id, args => Args}),
-    Now = erlang:system_time(second),
-    ZombieTs = prg_utils:unixtime_to_datetime(Now - 30),
-    NS = erlang:atom_to_list(?NS(C)),
-    %% TODO: rework it via storage backend
-    %% START SQL INJECTION
-    {ok, _, _, [{TaskId}]} = epg_pool:query(
-        default_pool,
-        "INSERT INTO \"" ++ NS ++
-            "_tasks\" "
-            "  (process_id, task_type, status, scheduled_time, running_time, args, last_retry_interval, attempts_count)"
-            "  VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING task_id",
-        [
-            Id,
-            <<"timeout">>,
-            <<"running">>,
-            ZombieTs,
-            ZombieTs,
-            <<>>,
-            0,
-            0
-        ]
-    ),
-    {ok, 1} = epg_pool:query(
-        default_pool,
-        "INSERT INTO \"" ++ NS ++
-            "_running\" "
-            "  (task_id, process_id, task_type, status, scheduled_time, running_time, args, "
-            "   last_retry_interval, attempts_count)"
-            "  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
-        [
-            TaskId,
-            Id,
-            <<"timeout">>,
-            <<"running">>,
-            ZombieTs,
-            ZombieTs,
-            <<>>,
-            0,
-            0
-        ]
-    ),
-    %% END SQL INJECTION
-
-    %% await zombie collection (process step timeout (10s) + random part (2s))
-    timer:sleep(12010),
-    {ok, #{
-        process_id := Id,
-        status := <<"error">>,
-        detail := <<"zombie detected">>
-    }} = progressor:get(#{ns => ?NS(C), id => Id}),
-    ok.
-%%
--spec put_process_with_remove_test(_) -> _.
-put_process_with_remove_test(C) ->
-    %% steps:
-    %% 1. put     -> [event1], remove 1s
-    %% 2. remove
-    Id = gen_id(),
-    Args = #{
-        process => #{
-            process_id => Id,
-            status => <<"running">>,
-            history => [event(1)]
-        },
-        action => #{set_timer => erlang:system_time(second) + 1, remove => true}
-    },
-    {ok, ok} = progressor:put(#{ns => ?NS(C), id => Id, args => Args}),
-    timer:sleep(?AWAIT_TIMEOUT(C)),
-    {ok, #{
-        process_id := Id,
-        status := <<"running">>,
-        history := [#{event_id := 1}]
-    }} = progressor:get(#{ns => ?NS(C), id => Id}),
-    timer:sleep(3000),
-    {error, <<"process not found">>} = progressor:get(#{ns => ?NS(C), id => Id}),
     ok.
 
 %%%%%%%%%%%%%%%%%%%%%
@@ -782,21 +486,17 @@ put_process_with_remove_test(C) ->
 
 mock_processor(simple_timers_test = TestCase) ->
     Self = self(),
-    MockProcessor = fun({_Type, _Args, #{history := History} = _Process}, _Opts, _Ctx) ->
-        case erlang:length(History) of
-            0 ->
+    MockProcessor = fun({_Type, _Args, Process}, _Opts, _Ctx) ->
+        case Process of
+            #{current_generation := 2, state := #{generation := 2}} ->
                 Result = #{
-                    events => [event(1)],
-                    metadata => #{<<"k">> => <<"v">>},
-                    %% postponed timer
-                    action => #{set_timer => erlang:system_time(second) + 2},
-                    aux_state => erlang:term_to_binary(<<"aux_state1">>)
+                    state => state()
                 },
-                Self ! 1,
+                Self ! 3,
                 {ok, Result};
-            1 ->
+            #{current_generation := 1, state := #{generation := 1}} ->
                 Result = #{
-                    events => [event(2)],
+                    state => state(),
                     %% continuation timer
                     action => #{set_timer => erlang:system_time(second)},
                     aux_state => erlang:term_to_binary(<<"aux_state2">>)
@@ -805,9 +505,13 @@ mock_processor(simple_timers_test = TestCase) ->
                 {ok, Result};
             _ ->
                 Result = #{
-                    events => []
+                    state => state(),
+                    metadata => #{<<"k">> => <<"v">>},
+                    %% postponed timer
+                    action => #{set_timer => erlang:system_time(second) + 2},
+                    aux_state => erlang:term_to_binary(<<"aux_state1">>)
                 },
-                Self ! 3,
+                Self ! 1,
                 {ok, Result}
         end
     end,
@@ -818,75 +522,68 @@ mock_processor(simple_call_test = TestCase) ->
     MockProcessor = fun
         ({init, <<"init_args">>, _Process}, _Opts, _Ctx) ->
             Result = #{
-                events => [event(1)],
+                state => state(),
                 action => #{set_timer => erlang:system_time(second) + 2}
             },
             Self ! 1,
             {ok, Result};
         ({call, <<"call_args">>, _Process}, _Opts, _Ctx) ->
-            %% call when process suspended (wait timeout)
+            %% call when process suspended (deferred timer while call processed)
             timer:sleep(3000),
             Result = #{
                 response => <<"response">>,
-                events => [event(2)]
+                state => state()
             },
             Self ! 2,
             {ok, Result};
-        ({timeout, <<>>, #{history := History} = _Process}, _Opts, _Ctx) ->
+        ({timeout, <<>>, #{current_generation := 2} = _Process}, _Opts, _Ctx) ->
             %% timeout after call processing
-            ?assertEqual(2, erlang:length(History)),
             Result = #{
-                events => [event(3)]
+                state => state()
             },
             Self ! 3,
             {ok, Result}
     end,
     mock_processor(TestCase, MockProcessor);
 %%
-mock_processor(simple_call_with_range_test = TestCase) ->
+mock_processor(simple_call_with_generation_test = TestCase) ->
     Self = self(),
     MockProcessor = fun
-        ({init, <<"init_args">>, Process}, _Opts, _Ctx) ->
-            ?assertEqual(0, maps:get(last_event_id, Process)),
+        ({init, <<"init_args">>, _Process}, _Opts, _Ctx) ->
             Result = #{
-                events => [event(1), event(2), event(3), event(4)]
+                state => state()
             },
             Self ! 1,
             {ok, Result};
-        ({call, <<"call_args">>, #{history := History} = Process}, _Opts, _Ctx) ->
-            %% call with range limit=2, offset=1
-            ?assertEqual(2, erlang:length(History)),
-            ?assertEqual(4, maps:get(last_event_id, Process)),
-            [
-                #{event_id := 2},
-                #{event_id := 3}
-            ] = History,
+        ({call, <<"call_args">>, #{current_generation := 1, state := #{generation := 1}} = _Process}, _Opts, _Ctx) ->
+            %% call with generation=1 when current_generation=1
             Result = #{
                 response => <<"response">>,
-                events => [event(5)]
+                state => state()
             },
             Self ! 2,
             {ok, Result};
-        ({call, <<"call_args_back">>, #{history := History} = Process}, _Opts, _Ctx) ->
-            %% call with range limit=2, offset=5 direction=backward
-            ?assertEqual(2, erlang:length(History)),
-            ?assertEqual(5, maps:get(last_event_id, Process)),
-            [
-                #{event_id := 4},
-                #{event_id := 3}
-            ] = History,
+        (
+            {
+                call,
+                <<"call_args_back">>,
+                #{current_generation := 2, state := #{generation := 1}} = _Process
+            },
+            _Opts,
+            _Ctx
+        ) ->
+            %% call with generation=1 when current_generation=2
             Result = #{
                 response => <<"response">>,
-                events => [event(6)],
+                state => state(),
                 action => #{set_timer => erlang:system_time(second)}
             },
             Self ! 3,
             {ok, Result};
-        ({timeout, <<>>, #{history := History} = Process}, _Opts, _Ctx) ->
-            ?assertEqual(6, erlang:length(History)),
-            ?assertEqual(6, maps:get(last_event_id, Process)),
+        ({timeout, <<>>, #{current_generation := 3, state := #{generation := 3}} = _Process}, _Opts, _Ctx) ->
+            %% timeout task executes on last generation
             Result = #{
-                events => [event(7)]
+                state => state()
             },
             Self ! 4,
             {ok, Result}
@@ -898,25 +595,24 @@ mock_processor(call_replace_timer_test = TestCase) ->
     MockProcessor = fun
         ({init, <<"init_args">>, _Process}, _Opts, _Ctx) ->
             Result = #{
-                events => [event(1)],
+                state => state(),
                 action => #{set_timer => erlang:system_time(second) + 2, remove => true}
             },
             Self ! 1,
             {ok, Result};
         ({call, <<"call_args">>, _Process}, _Opts, _Ctx) ->
-            %% call when process suspended (wait timeout)
+            %% call when process suspended
             Result = #{
                 response => <<"response">>,
-                events => [],
+                state => state(),
                 action => #{set_timer => erlang:system_time(second)}
             },
             Self ! 2,
             {ok, Result};
-        ({timeout, <<>>, #{history := History} = _Process}, _Opts, _Ctx) ->
+        ({timeout, <<>>, #{current_generation := 2} = _Process}, _Opts, _Ctx) ->
             %% timeout after call processing (remove action was cancelled by call action)
-            ?assertEqual(1, erlang:length(History)),
             Result = #{
-                events => [event(2)]
+                state => state()
             },
             Self ! 3,
             {ok, Result}
@@ -928,7 +624,7 @@ mock_processor(call_unset_timer_test = TestCase) ->
     MockProcessor = fun
         ({init, <<"init_args">>, _Process}, _Opts, _Ctx) ->
             Result = #{
-                events => [event(1)],
+                state => state(),
                 action => #{set_timer => erlang:system_time(second) + 2}
             },
             Self ! 1,
@@ -937,16 +633,14 @@ mock_processor(call_unset_timer_test = TestCase) ->
             %% call when process suspended (wait timeout)
             Result = #{
                 response => <<"response">>,
-                events => [],
+                state => state(),
                 action => unset_timer
             },
             Self ! 2,
             {ok, Result};
-        ({timeout, <<>>, #{history := History} = _Process}, _Opts, _Ctx) ->
-            %% timeout after call processing (should not work!)
-            ?assertEqual(2, erlang:length(History)),
+        ({timeout, <<>>, #{current_generation := 2} = _Process}, _Opts, _Ctx) ->
             Result = #{
-                events => [event(3)]
+                state => state()
             },
             Self ! 3,
             {ok, Result}
@@ -958,31 +652,29 @@ mock_processor(postponed_call_test = TestCase) ->
     MockProcessor = fun
         ({init, <<"init_args">>, _Process}, _Opts, _Ctx) ->
             Result = #{
-                events => [],
+                state => state(),
                 action => #{set_timer => erlang:system_time(second)}
             },
             Self ! 1,
             {ok, Result};
-        ({timeout, <<>>, #{history := []} = _Process}, _Opts, _Ctx) ->
+        ({timeout, <<>>, #{current_generation := 1} = _Process}, _Opts, _Ctx) ->
             timer:sleep(3000),
             Result = #{
-                events => [event(1)],
+                state => state(),
                 action => #{set_timer => erlang:system_time(second)}
             },
             Self ! 2,
             {ok, Result};
-        ({call, <<"call_args">>, #{history := History} = _Process}, _Opts, _Ctx) ->
-            ?assertEqual(1, erlang:length(History)),
+        ({call, <<"call_args">>, #{current_generation := 2} = _Process}, _Opts, _Ctx) ->
             Result = #{
                 response => <<"response">>,
-                events => [event(2)]
+                state => state()
             },
             Self ! 3,
             {ok, Result};
-        ({timeout, <<>>, #{history := History} = _Process}, _Opts, _Ctx) ->
-            ?assertEqual(2, erlang:length(History)),
+        ({timeout, <<>>, #{current_generation := 3} = _Process}, _Opts, _Ctx) ->
             Result = #{
-                events => [event(3)]
+                state => state()
             },
             Self ! 4,
             {ok, Result}
@@ -994,23 +686,22 @@ mock_processor(postponed_call_to_suspended_process_test = TestCase) ->
     MockProcessor = fun
         ({init, <<"init_args">>, _Process}, _Opts, _Ctx) ->
             Result = #{
-                events => [],
+                state => state(),
                 action => #{set_timer => erlang:system_time(second)}
             },
             Self ! 1,
             {ok, Result};
-        ({timeout, <<>>, #{history := []} = _Process}, _Opts, _Ctx) ->
+        ({timeout, <<>>, #{current_generation := 1} = _Process}, _Opts, _Ctx) ->
             timer:sleep(3000),
             Result = #{
-                events => [event(1)]
+                state => state()
             },
             Self ! 2,
             {ok, Result};
-        ({call, <<"call_args">>, #{history := History} = _Process}, _Opts, _Ctx) ->
-            ?assertEqual(1, erlang:length(History)),
+        ({call, <<"call_args">>, #{current_generation := 2} = _Process}, _Opts, _Ctx) ->
             Result = #{
                 response => <<"response">>,
-                events => [event(2)]
+                state => state()
             },
             Self ! 3,
             {ok, Result}
@@ -1022,15 +713,15 @@ mock_processor(multiple_calls_test = TestCase) ->
     MockProcessor = fun
         ({init, <<"init_args">>, _Process}, _Opts, _Ctx) ->
             Result = #{
-                events => []
+                state => state()
             },
             Self ! 1,
             {ok, Result};
-        ({call, <<N>>, _Process}, _Opts, _Ctx) ->
+        ({call, <<_N>>, _Process}, _Opts, _Ctx) ->
             timer:sleep(100),
             Result = #{
                 response => <<"response">>,
-                events => [event(N)]
+                state => state()
             },
             Self ! iterate,
             {ok, Result}
@@ -1042,26 +733,25 @@ mock_processor(simple_repair_after_non_retriable_error_test = TestCase) ->
     MockProcessor = fun
         ({init, <<"init_args">>, _Process}, _Opts, _Ctx) ->
             Result = #{
-                events => [],
+                state => state(),
                 action => #{set_timer => erlang:system_time(second)}
             },
             Self ! 1,
             {ok, Result};
-        ({timeout, <<>>, #{history := []} = _Process}, _Opts, <<>>) ->
+        ({timeout, <<>>, #{current_generation := 1} = _Process}, _Opts, <<>>) ->
             Self ! 2,
             {error, do_not_retry};
-        ({timeout, <<>>, #{history := []} = _Process}, _Opts, <<"simple_repair_ctx">>) ->
+        ({timeout, <<>>, #{current_generation := 1} = _Process}, _Opts, <<"simple_repair_ctx">>) ->
             %% timeout via simple repair
             Result = #{
-                events => [event(1)],
+                state => state(),
                 action => #{set_timer => erlang:system_time(second)}
             },
             Self ! 3,
             {ok, Result};
-        ({timeout, <<>>, #{history := History} = _Process}, _Opts, _Ctx) ->
-            ?assertEqual(1, erlang:length(History)),
+        ({timeout, <<>>, #{current_generation := 2} = _Process}, _Opts, _Ctx) ->
             Result = #{
-                events => [event(2)]
+                state => state()
             },
             Self ! 4,
             {ok, Result}
@@ -1073,26 +763,19 @@ mock_processor(repair_after_non_retriable_error_test = TestCase) ->
     MockProcessor = fun
         ({init, <<"init_args">>, _Process}, _Opts, _Ctx) ->
             Result = #{
-                events => [],
+                state => state(),
                 action => #{set_timer => erlang:system_time(second)}
             },
             Self ! 1,
             {ok, Result};
-        ({timeout, <<>>, #{history := []} = _Process}, _Opts, _Ctx) ->
+        ({timeout, <<>>, #{current_generation := 1} = _Process}, _Opts, _Ctx) ->
             Self ! 2,
             {error, do_not_retry};
-        ({repair, <<"repair_args">>, #{history := []} = _Process}, _Opts, _Ctx) ->
+        ({repair, <<"repair_args">>, #{current_generation := 1} = _Process}, _Opts, _Ctx) ->
             Result = #{
-                events => [event(1)]
+                state => state()
             },
             Self ! 3,
-            {ok, Result};
-        ({timeout, <<>>, #{history := History} = _Process}, _Opts, _Ctx) ->
-            ?assertEqual(1, erlang:length(History)),
-            Result = #{
-                events => [event(2)]
-            },
-            Self ! 4,
             {ok, Result}
     end,
     mock_processor(TestCase, MockProcessor);
@@ -1102,12 +785,12 @@ mock_processor(error_after_max_retries_test = TestCase) ->
     MockProcessor = fun
         ({init, <<"init_args">>, _Process}, _Opts, _Ctx) ->
             Result = #{
-                events => [],
+                state => state(),
                 action => #{set_timer => erlang:system_time(second)}
             },
             Self ! 1,
             {ok, Result};
-        ({timeout, <<>>, #{history := []} = _Process}, _Opts, _Ctx) ->
+        ({timeout, <<>>, #{current_generation := 1} = _Process}, _Opts, _Ctx) ->
             %% must be 3 attempts
             Self ! iterate,
             {error, retry_this}
@@ -1120,22 +803,22 @@ mock_processor(repair_after_call_error_test = TestCase) ->
         ({init, <<"init_args">>, _Process}, _Opts, _Ctx) ->
             Result = #{
                 metadata => #{<<"k">> => <<"v">>},
-                events => []
+                state => state()
             },
             Self ! 1,
             {ok, Result};
-        ({call, <<"call_args">>, #{history := []} = _Process}, _Opts, _Ctx) ->
+        ({call, <<"call_args">>, #{current_generation := 1} = _Process}, _Opts, _Ctx) ->
             Self ! 2,
             %% retriable error for call must be ignore and process set error status
             {error, retry_this};
-        ({repair, <<"bad_repair_args">>, #{history := []} = _Process}, _Opts, _Ctx) ->
+        ({repair, <<"bad_repair_args">>, #{current_generation := 1} = _Process}, _Opts, _Ctx) ->
             %% repair error should not rewrite process detail
             Self ! 3,
             {error, <<"repair_error">>};
-        ({repair, <<"repair_args">>, #{history := []} = _Process}, _Opts, _Ctx) ->
+        ({repair, <<"repair_args">>, #{current_generation := 1} = _Process}, _Opts, _Ctx) ->
             Result = #{
                 metadata => #{<<"k2">> => <<"v2">>},
-                events => [event(1)]
+                state => state()
             },
             Self ! 4,
             {ok, Result}
@@ -1145,7 +828,7 @@ mock_processor(repair_after_call_error_test = TestCase) ->
 mock_processor(remove_by_timer_test = TestCase) ->
     MockProcessor = fun({init, <<"init_args">>, _Process}, _Opts, _Ctx) ->
         Result = #{
-            events => [event(1), event(2)],
+            state => state(),
             action => #{set_timer => erlang:system_time(second) + 2, remove => true}
         },
         {ok, Result}
@@ -1157,27 +840,18 @@ mock_processor(remove_without_timer_test = TestCase) ->
     MockProcessor = fun
         ({init, <<"init_args">>, _Process}, _Opts, _Ctx) ->
             Result = #{
-                events => [event(1)],
+                state => state(),
                 action => #{set_timer => erlang:system_time(second) + 2}
             },
             Self ! 1,
             {ok, Result};
         ({timeout, <<>>, _Process}, _Opts, _Ctx) ->
             Result = #{
-                events => [],
+                state => state(),
                 action => #{remove => true}
             },
             Self ! 2,
             {ok, Result}
-    end,
-    mock_processor(TestCase, MockProcessor);
-%%
-mock_processor(put_process_with_timeout_test = TestCase) ->
-    Self = self(),
-    MockProcessor = fun({timeout, <<>>, _Process}, _Opts, _Ctx) ->
-        Result = #{events => [event(2)]},
-        Self ! 1,
-        {ok, Result}
     end,
     mock_processor(TestCase, MockProcessor).
 
@@ -1210,12 +884,10 @@ expect_steps_counter(ExpectedSteps, CurrentStep) ->
         CurrentStep
     end.
 
-event(Id) ->
+state() ->
     #{
-        event_id => Id,
         timestamp => erlang:system_time(second),
         metadata => #{<<"format_version">> => 1},
-        %% msg_pack compatibility for kafka
         payload => erlang:term_to_binary({bin, crypto:strong_rand_bytes(8)})
     }.
 

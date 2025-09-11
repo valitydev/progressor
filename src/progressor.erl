@@ -11,10 +11,7 @@
 -export([repair/1]).
 -export([simple_repair/1]).
 -export([get/1]).
--export([put/1]).
 -export([health_check/1]).
-%% TODO
-%% -export([remove/1]).
 
 %% Internal API
 -export([reply/2]).
@@ -29,7 +26,7 @@
     args => term(),
     idempotency_key => binary(),
     context => binary(),
-    range => history_range(),
+    generation => explicit_generation(),
     options => map()
 }.
 
@@ -104,16 +101,6 @@ get(Req) ->
         Req
     ).
 
--spec put(request()) -> {ok, _Result} | {error, _Reason}.
-put(Req) ->
-    prg_utils:pipe(
-        [
-            fun add_ns_opts/1,
-            fun do_put/1
-        ],
-        Req
-    ).
-
 %% Details term must be json compatible for jsx encode/decode
 -spec health_check([namespace_id()]) -> {Status :: passing | critical, Details :: term()}.
 health_check(Namespaces) ->
@@ -171,18 +158,16 @@ check_idempotency(#{idempotency_key := _IdempotencyKey} = Req) ->
 check_idempotency(Req) ->
     Req.
 
-add_task(#{id := Id, type := Type} = Opts) ->
-    Context = maps:get(context, Opts, <<>>),
-    Args = maps:get(args, Opts, <<>>),
+add_task(#{id := Id, type := Type} = Req) ->
     TaskData = #{
         process_id => Id,
-        args => Args,
+        args => maps:get(args, Req, <<>>),
         task_type => convert_task_type(Type),
-        context => Context,
-        metadata => #{range => maps:get(range, Opts, #{})}
+        context => maps:get(context, Req, <<>>),
+        idempotency_key => maps:get(idempotency_key, Req, undefined),
+        generation => maps:get(generation, Req, undefined)
     },
-    Task = make_task(maybe_add_idempotency(TaskData, maps:get(idempotency_key, Opts, undefined))),
-    Opts#{task => Task}.
+    Req#{task => make_task(TaskData)}.
 
 check_process_status(
     #{ns_opts := #{storage := StorageOpts}, id := Id, ns := NsId} = Opts, ExpectedStatus
@@ -268,42 +253,10 @@ await_task_result(StorageOpts, NsId, KeyOrId, Timeout, Duration) ->
             )
     end.
 
-do_get(#{ns_opts := #{storage := StorageOpts}, id := Id, ns := NsId, range := HistoryRange} = Req) ->
-    prg_storage:get_process(recipient(options(Req)), StorageOpts, NsId, Id, HistoryRange);
+do_get(#{ns_opts := #{storage := StorageOpts}, id := Id, ns := NsId, generation := Gen} = Req) ->
+    prg_storage:get_process(recipient(options(Req)), StorageOpts, NsId, Id, Gen);
 do_get(#{ns_opts := #{storage := StorageOpts}, id := Id, ns := NsId} = Req) ->
-    prg_storage:get_process(recipient(options(Req)), StorageOpts, NsId, Id, #{}).
-
-do_put(
-    #{
-        ns_opts := #{storage := StorageOpts},
-        id := Id,
-        ns := NsId,
-        args := #{process := Process} = Args
-    } = Opts
-) ->
-    #{
-        process_id := ProcessId
-    } = Process,
-    Action = maps:get(action, Args, undefined),
-    Context = maps:get(context, Opts, <<>>),
-    Now = erlang:system_time(second),
-    InitTask = #{
-        process_id => ProcessId,
-        task_type => <<"init">>,
-        status => <<"finished">>,
-        args => <<>>,
-        context => Context,
-        response => term_to_binary({ok, ok}),
-        scheduled_time => Now,
-        running_time => Now,
-        finished_time => Now,
-        last_retry_interval => 0,
-        attempts_count => 0
-    },
-    ActiveTask = action_to_task(Action, ProcessId, Context),
-    ProcessData0 = #{process => Process, init_task => InitTask},
-    ProcessData = maybe_add_key(ActiveTask, active_task, ProcessData0),
-    prg_storage:put_process_data(StorageOpts, NsId, Id, ProcessData).
+    prg_storage:get_process(recipient(options(Req)), StorageOpts, NsId, Id, latest).
 
 do_health_check(#{ns := NsId, ns_opts := #{storage := StorageOpts}}) ->
     try prg_storage:health_check(StorageOpts) of
@@ -355,11 +308,6 @@ convert_task_type(timeout) ->
 convert_task_type(repair) ->
     <<"repair">>.
 
-maybe_add_idempotency(Task, undefined) ->
-    Task;
-maybe_add_idempotency(Task, IdempotencyKey) ->
-    Task#{idempotency_key => IdempotencyKey}.
-
 make_task(#{task_type := TaskType} = TaskData) when
     TaskType =:= <<"init">>;
     TaskType =:= <<"call">>;
@@ -373,7 +321,7 @@ make_task(#{task_type := TaskType} = TaskData) when
         last_retry_interval => 0,
         attempts_count => 0
     },
-    maps:merge(Defaults, TaskData);
+    maps:filter(fun(_K, V) -> V =/= undefined end, maps:merge(Defaults, TaskData));
 make_task(#{task_type := <<"timeout">>} = TaskData) ->
     Now = erlang:system_time(second),
     Defaults = #{
@@ -384,18 +332,7 @@ make_task(#{task_type := <<"timeout">>} = TaskData) ->
         last_retry_interval => 0,
         attempts_count => 0
     },
-    maps:merge(Defaults, TaskData);
-make_task(#{task_type := <<"notify">>} = TaskData) ->
-    Now = erlang:system_time(second),
-    Defaults = #{
-        status => <<"running">>,
-        scheduled_time => Now,
-        running_time => Now,
-        response => term_to_binary({ok, ok}),
-        last_retry_interval => 0,
-        attempts_count => 0
-    },
-    maps:merge(Defaults, TaskData).
+    maps:filter(fun(_K, V) -> V =/= undefined end, maps:merge(Defaults, TaskData)).
 
 capture_worker(NsId) ->
     case prg_scheduler:capture_worker(NsId, self()) of
@@ -412,32 +349,6 @@ check_for_run(undefined) ->
     <<"waiting">>;
 check_for_run(Pid) when is_pid(Pid) ->
     <<"running">>.
-
-action_to_task(undefined, _ProcessId, _Ctx) ->
-    undefined;
-action_to_task(unset_timer, _ProcessId, _Ctx) ->
-    undefined;
-action_to_task(#{set_timer := Timestamp} = Action, ProcessId, Context) ->
-    TaskType =
-        case maps:get(remove, Action, false) of
-            true -> <<"remove">>;
-            false -> <<"timeout">>
-        end,
-    #{
-        process_id => ProcessId,
-        task_type => TaskType,
-        status => <<"waiting">>,
-        args => <<>>,
-        context => Context,
-        scheduled_time => Timestamp,
-        last_retry_interval => 0,
-        attempts_count => 0
-    }.
-
-maybe_add_key(undefined, _Key, Map) ->
-    Map;
-maybe_add_key(Value, Key, Map) ->
-    Map#{Key => Value}.
 
 options(#{options := Opts}) ->
     Opts;
