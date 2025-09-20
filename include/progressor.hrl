@@ -10,7 +10,8 @@
     history => [event()],
     corrupted_by => task_id(),
     range => history_range(),
-    last_event_id => event_id()
+    last_event_id => event_id(),
+    running_task => task_id()
 }.
 
 -type task() :: #{

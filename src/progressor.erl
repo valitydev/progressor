@@ -31,7 +31,8 @@
     idempotency_key => binary(),
     context => binary(),
     range => history_range(),
-    options => map()
+    options => map(),
+    _ => _
 }.
 
 %% see receive blocks bellow in this module
@@ -279,10 +280,30 @@ await_task_result(StorageOpts, NsId, KeyOrId, Timeout, Duration) ->
             )
     end.
 
+do_get(
+    #{ns_opts := #{storage := StorageOpts}, id := Id, ns := NsId, range := HistoryRange, running_task := TaskId} = Req
+) ->
+    %% retry clause
+    case prg_storage:get_process_with_running(StorageOpts, NsId, Id, HistoryRange) of
+        {ok, #{running_task := TaskId}} ->
+            %% same task_id, await task finished
+            timer:sleep(1000),
+            do_get(Req);
+        Result ->
+            %% previous task finished, return result
+            Result
+    end;
 do_get(#{ns_opts := #{storage := StorageOpts}, id := Id, ns := NsId, range := HistoryRange} = Req) ->
-    prg_storage:get_process(recipient(options(Req)), StorageOpts, NsId, Id, HistoryRange);
-do_get(#{ns_opts := #{storage := StorageOpts}, id := Id, ns := NsId} = Req) ->
-    prg_storage:get_process(recipient(options(Req)), StorageOpts, NsId, Id, #{}).
+    case prg_storage:get_process_with_running(StorageOpts, NsId, Id, HistoryRange) of
+        {ok, #{running_task := TaskId}} ->
+            %% some task running, sleep and retry
+            timer:sleep(1000),
+            do_get(Req#{running_task => TaskId});
+        Result ->
+            Result
+    end;
+do_get(Req) ->
+    do_get(Req#{range => #{}}).
 
 do_trace(#{ns_opts := #{storage := StorageOpts}, id := Id, ns := NsId}) ->
     prg_storage:process_trace(StorageOpts, NsId, Id).
@@ -453,12 +474,12 @@ maybe_add_key(undefined, _Key, Map) ->
 maybe_add_key(Value, Key, Map) ->
     Map#{Key => Value}.
 
-options(#{options := Opts}) ->
-    Opts;
-options(_) ->
-    #{}.
+%options(#{options := Opts}) ->
+%    Opts;
+%options(_) ->
+%    #{}.
 
-recipient(#{cache := ignore}) ->
-    internal;
-recipient(_Req) ->
-    external.
+%recipient(#{cache := ignore}) ->
+%    internal;
+%recipient(_Req) ->
+%    external.

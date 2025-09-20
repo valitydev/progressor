@@ -14,6 +14,7 @@
 -export([prepare_repair/4]).
 -export([put_process_data/4]).
 -export([process_trace/3]).
+-export([get_process_with_running/4]).
 
 %% scan functions
 -export([collect_zombies/3]).
@@ -134,16 +135,33 @@ get_process(Recipient, PgOpts, NsId, ProcessId, HistoryRange) ->
             end
         end
     ),
-    case RawResult of
-        {error, _} = Error ->
-            Error;
-        {ok, {ProcColumns, ProcRows}, {EventsColumns, EventsRows}, LastEventId} ->
-            [Process] = to_maps(ProcColumns, ProcRows, fun marshal_process/1),
-            History = to_maps(EventsColumns, EventsRows, fun marshal_event/1),
-            {ok, Process#{history => History, last_event_id => LastEventId, range => HistoryRange}}
-    end.
+    parse_process_info(RawResult, HistoryRange).
 
-%%%
+-spec get_process_with_running(pg_opts(), namespace_id(), id(), history_range()) ->
+    {ok, process()} | {error, _Reason}.
+get_process_with_running(PgOpts, NsId, ProcessId, HistoryRange) ->
+    Pool = get_pool(external, PgOpts),
+    #{
+        processes := ProcessesTable,
+        running := RunningTable,
+        events := EventsTable
+    } = prg_pg_utils:tables(NsId),
+    RangeCondition = create_range_condition(HistoryRange),
+    RawResult = epg_pool:transaction(
+        Pool,
+        fun(Connection) ->
+            case do_get_process_with_running(Connection, ProcessesTable, RunningTable, ProcessId) of
+                {ok, _, []} ->
+                    {error, <<"process not found">>};
+                {ok, ColumnsPr, RowsPr} ->
+                    {ok, _, _} =
+                        {ok, ColumnstEv, RowsEv} = do_get_events(Connection, EventsTable, ProcessId, RangeCondition),
+                    LastEventId = get_last_event_id(Connection, EventsTable, ProcessId),
+                    {ok, {ColumnsPr, RowsPr}, {ColumnstEv, RowsEv}, LastEventId}
+            end
+        end
+    ),
+    parse_process_info(RawResult, HistoryRange).
 
 -spec put_process_data(
     pg_opts(),
@@ -677,9 +695,33 @@ direction(_) ->
 do_get_process(Connection, Table, ProcessId) ->
     epg_pool:query(
         Connection,
-        "SELECT * from " ++ Table ++ " WHERE process_id = $1",
+        "SELECT * FROM " ++ Table ++ " WHERE process_id = $1",
         [ProcessId]
     ).
+
+do_get_process_with_running(Connection, ProcessesTable, RunningTable, ProcessId) ->
+    SQL =
+        "SELECT"
+        "  pr.*, rt.task_id as running_task FROM " ++ ProcessesTable ++
+            " pr "
+            "  LEFT JOIN " ++ RunningTable ++
+            " rt ON pr.process_id = rt.process_id "
+            "  WHERE pr.process_id = $1",
+    epg_pool:query(
+        Connection,
+        SQL,
+        [ProcessId]
+    ).
+
+parse_process_info(RawResult, HistoryRange) ->
+    case RawResult of
+        {error, _} = Error ->
+            Error;
+        {ok, {ProcColumns, ProcRows}, {EventsColumns, EventsRows}, LastEventId} ->
+            [Process] = to_maps(ProcColumns, ProcRows, fun marshal_process/1),
+            History = to_maps(EventsColumns, EventsRows, fun marshal_event/1),
+            {ok, Process#{history => History, last_event_id => LastEventId, range => HistoryRange}}
+    end.
 
 do_get_events(Connection, EventsTable, ProcessId, RangeCondition) ->
     SQL = "SELECT * FROM " ++ EventsTable ++ " WHERE process_id = $1 " ++ RangeCondition,
@@ -1105,6 +1147,7 @@ marshal_process(Process) ->
             (<<"aux_state">>, AuxState, Acc) -> Acc#{aux_state => AuxState};
             (<<"metadata">>, Meta, Acc) -> Acc#{metadata => Meta};
             (<<"corrupted_by">>, CorruptedBy, Acc) -> Acc#{corrupted_by => CorruptedBy};
+            (<<"running_task">>, RunningTask, Acc) -> Acc#{running_task => RunningTask};
             (_, _, Acc) -> Acc
         end,
         #{},
