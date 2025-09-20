@@ -10,6 +10,7 @@
 -export([prepare_call/4]).
 -export([prepare_repair/4]).
 -export([put_process_data/4]).
+-export([process_trace/3]).
 
 %% scan functions
 -export([search_timers/4]).
@@ -63,6 +64,10 @@ get_process_status(#{client := Handler, options := HandlerOpts}, NsId, Id) ->
     {ok, _Result} | {error, _Reason}.
 put_process_data(#{client := Handler, options := HandlerOpts}, NsId, Id, ProcessData) ->
     Handler:put_process_data(HandlerOpts, NsId, Id, ProcessData).
+
+-spec process_trace(storage_opts(), namespace_id(), id()) -> {ok, _Result} | {error, _Reason}.
+process_trace(#{client := Handler, options := HandlerOpts}, NsId, Id) ->
+    Handler:process_trace(HandlerOpts, NsId, Id).
 
 -spec prepare_init(storage_opts(), namespace_id(), id(), task()) ->
     {ok, {postpone, task_id()} | {continue, task_id()}} | {error, _Reason}.

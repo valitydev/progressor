@@ -242,6 +242,61 @@ call_replace_timer_test(C) ->
             }
         ]
     }} = progressor:get(#{ns => ?NS(C), id => Id}),
+    {ok, [
+        #{
+            task_id := _,
+            args := <<"init_args">>,
+            task_type := <<"init">>,
+            task_status := <<"finished">>,
+            task_metadata := #{<<"range">> := #{}},
+            retry_interval := 0,
+            retry_attempts := 0,
+            scheduled := _,
+            running := _,
+            finished := _,
+            response := {ok, ok},
+            event_id := 1,
+            event_timestamp := _,
+            event_metadata := #{<<"format_version">> := 1},
+            event_payload := _
+        },
+        #{
+            task_id := _,
+            task_type := <<"remove">>,
+            task_status := <<"cancelled">>,
+            scheduled := _,
+            retry_interval := 0,
+            retry_attempts := 0
+        },
+        #{
+            task_id := _,
+            args := <<"call_args">>,
+            task_type := <<"call">>,
+            task_status := <<"finished">>,
+            retry_interval := 0,
+            retry_attempts := 0,
+            task_metadata := #{<<"range">> := #{}},
+            scheduled := _,
+            running := _,
+            finished := _,
+            response := {ok, <<"response">>}
+        },
+        #{
+            task_id := _,
+            task_type := <<"timeout">>,
+            task_status := <<"finished">>,
+            retry_interval := 0,
+            retry_attempts := 0,
+            scheduled := _,
+            %% TODO need fix for running time!!!
+            finished := _,
+            response := {ok, ok},
+            event_id := 2,
+            event_timestamp := _,
+            event_metadata := #{<<"format_version">> := 1},
+            event_payload := _
+        }
+    ]} = progressor:trace(#{ns => ?NS(C), id => Id}),
     unmock_processor(),
     ok.
 %%

@@ -12,6 +12,7 @@
 -export([simple_repair/1]).
 -export([get/1]).
 -export([put/1]).
+-export([trace/1]).
 -export([health_check/1]).
 %% TODO
 %% -export([remove/1]).
@@ -110,6 +111,16 @@ put(Req) ->
         [
             fun add_ns_opts/1,
             fun do_put/1
+        ],
+        Req
+    ).
+
+-spec trace(request()) -> {ok, _Result} | {error, _Reason}.
+trace(Req) ->
+    prg_utils:pipe(
+        [
+            fun add_ns_opts/1,
+            fun do_trace/1
         ],
         Req
     ).
@@ -272,6 +283,9 @@ do_get(#{ns_opts := #{storage := StorageOpts}, id := Id, ns := NsId, range := Hi
     prg_storage:get_process(recipient(options(Req)), StorageOpts, NsId, Id, HistoryRange);
 do_get(#{ns_opts := #{storage := StorageOpts}, id := Id, ns := NsId} = Req) ->
     prg_storage:get_process(recipient(options(Req)), StorageOpts, NsId, Id, #{}).
+
+do_trace(#{ns_opts := #{storage := StorageOpts}, id := Id, ns := NsId}) ->
+    prg_storage:process_trace(StorageOpts, NsId, Id).
 
 do_put(
     #{
