@@ -10,7 +10,8 @@
     history => [event()],
     corrupted_by => task_id(),
     range => history_range(),
-    last_event_id => event_id()
+    last_event_id => event_id(),
+    running_task => task_id()
 }.
 
 -type task() :: #{
@@ -39,6 +40,27 @@
     metadata => #{format => pos_integer()},
     payload := binary()
 }.
+
+-type process_trace_unit() :: #{
+    task_id := task_id(),
+    task_type := task_type(),
+    task_status := task_status(),
+    scheduled := timestamp_sec(),
+    running => timestamp_sec(),
+    finished => timestamp_sec(),
+    args => binary(),
+    metadata => map(),
+    idempotency_key => binary(),
+    response => term(),
+    retry_interval => non_neg_integer(),
+    retry_attempts => non_neg_integer(),
+    event_id => event_id(),
+    event_timestamp => timestamp_sec(),
+    event_metadata => #{format => pos_integer()},
+    event_payload => binary()
+}.
+
+-type process_flat_trace() :: [process_trace_unit()].
 
 %%%
 %%% Config options

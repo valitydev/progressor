@@ -199,9 +199,6 @@ handle_result(
         Pid, Deadline, NsOpts, extract_task_type(TaskHeader), ProcessId
     ),
     ok = prg_worker_sidecar:event_sink(Pid, Deadline, NsOpts, ProcessId, Events),
-    %% just for tests
-    ok = maybe_wait_call(application:get_env(progressor, call_wait_timeout, undefined)),
-    %%
     SaveResult = prg_worker_sidecar:complete_and_continue(
         Pid,
         Deadline,
@@ -598,11 +595,6 @@ action_to_task_type(#{remove := true}) ->
     <<"remove">>;
 action_to_task_type(#{set_timer := _}) ->
     <<"timeout">>.
-
-maybe_wait_call(undefined) ->
-    ok;
-maybe_wait_call(Timeout) ->
-    timer:sleep(Timeout).
 
 last_event_id([]) ->
     0;
