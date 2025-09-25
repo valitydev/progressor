@@ -262,43 +262,32 @@ get_task_result(#{
         {error, not_found} ->
             not_found;
         {error, in_progress} ->
-            TimeoutSec = maps:get(process_step_timeout, NsOpts, ?DEFAULT_STEP_TIMEOUT_SEC),
-            Timeout = TimeoutSec * 1000,
-            await_task_result(StorageOpts, NsId, {idempotency_key, IdempotencyKey}, Timeout, 0)
+            StepTimeoutSec = maps:get(process_step_timeout, NsOpts, ?DEFAULT_STEP_TIMEOUT_SEC),
+            StepTimeout = StepTimeoutSec * 1000,
+            await_task_result(StorageOpts, NsId, {idempotency_key, IdempotencyKey}, StepTimeout, 0)
     end.
 
-await_task_result(_StorageOpts, _NsId, _KeyOrId, Timeout, Duration) when Duration > Timeout ->
+await_task_result(_StorageOpts, _NsId, _KeyOrId, StepTimeout, Duration) when Duration > StepTimeout ->
     {error, <<"timeout">>};
-await_task_result(StorageOpts, NsId, KeyOrId, Timeout, Duration) ->
+await_task_result(StorageOpts, NsId, KeyOrId, StepTimeout, Duration) ->
     case prg_storage:get_task_result(StorageOpts, NsId, KeyOrId) of
         {ok, Result} ->
             Result;
         {error, _} ->
-            timer:sleep(?TASK_REPEAT_REQUEST_TIMEOUT),
+            RepeatTimeout = application:get_env(progressor, task_repeat_request_timeout, ?TASK_REPEAT_REQUEST_TIMEOUT),
+            timer:sleep(RepeatTimeout),
             await_task_result(
-                StorageOpts, NsId, KeyOrId, Timeout, Duration + ?TASK_REPEAT_REQUEST_TIMEOUT
+                StorageOpts, NsId, KeyOrId, StepTimeout, Duration + RepeatTimeout
             )
     end.
 
-do_get(
-    #{ns_opts := #{storage := StorageOpts}, id := Id, ns := NsId, range := HistoryRange, running_task := TaskId} = Req
-) ->
-    %% retry clause
-    case prg_storage:get_process_with_running(StorageOpts, NsId, Id, HistoryRange) of
-        {ok, #{running_task := TaskId}} ->
-            %% same task_id, await task finished
-            timer:sleep(1000),
-            do_get(Req);
-        Result ->
-            %% previous task finished, return result
-            Result
-    end;
 do_get(#{ns_opts := #{storage := StorageOpts}, id := Id, ns := NsId, range := HistoryRange} = Req) ->
-    case prg_storage:get_process_with_running(StorageOpts, NsId, Id, HistoryRange) of
-        {ok, #{running_task := TaskId}} ->
-            %% some task running, sleep and retry
-            timer:sleep(1000),
-            do_get(Req#{running_task => TaskId});
+    case prg_storage:get_process_with_initialization(StorageOpts, NsId, Id, HistoryRange) of
+        {ok, #{initialization := _TaskId}} ->
+            %% init task not finished, await and retry
+            Timeout = application:get_env(progressor, task_repeat_request_timeout, ?TASK_REPEAT_REQUEST_TIMEOUT),
+            timer:sleep(Timeout),
+            do_get(Req);
         Result ->
             Result
     end;

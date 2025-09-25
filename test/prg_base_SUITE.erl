@@ -837,7 +837,7 @@ put_process_with_remove_test(C) ->
 -spec task_race_condition_hack_test(_) -> _.
 task_race_condition_hack_test(C) ->
     %% steps:
-    %% 1. init (spawn) -> [event1], timer 3s
+    %% 1. init (sleep 3s) -> [event1], undefined
     _ = mock_processor(task_race_condition_hack_test),
     Id = gen_id(),
     erlang:spawn(fun() -> progressor:init(#{ns => ?NS(C), id => Id, args => <<"init_args">>}) end),
@@ -847,6 +847,7 @@ task_race_condition_hack_test(C) ->
         range := #{},
         history := [#{event_id := 1}],
         process_id := Id,
+        aux_state := <<"aux_state">>,
         last_event_id := 1
     }} = progressor:get(#{ns => ?NS(C), id => Id}),
     ok.
@@ -1261,7 +1262,8 @@ mock_processor(task_race_condition_hack_test = TestCase) ->
     MockProcessor = fun({init, <<"init_args">>, _Process}, _Opts, _Ctx) ->
         timer:sleep(3000),
         Result = #{
-            events => [event(1)]
+            events => [event(1)],
+            aux_state => <<"aux_state">>
         },
         Self ! 1,
         {ok, Result}

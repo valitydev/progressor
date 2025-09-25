@@ -11,7 +11,7 @@
     corrupted_by => task_id(),
     range => history_range(),
     last_event_id => event_id(),
-    running_task => task_id()
+    initialization => task_id()
 }.
 
 -type task() :: #{

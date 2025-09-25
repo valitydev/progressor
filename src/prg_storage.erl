@@ -11,7 +11,7 @@
 -export([prepare_repair/4]).
 -export([put_process_data/4]).
 -export([process_trace/3]).
--export([get_process_with_running/4]).
+-export([get_process_with_initialization/4]).
 
 %% scan functions
 -export([search_timers/4]).
@@ -70,10 +70,10 @@ put_process_data(#{client := Handler, options := HandlerOpts}, NsId, Id, Process
 process_trace(#{client := Handler, options := HandlerOpts}, NsId, Id) ->
     Handler:process_trace(HandlerOpts, NsId, Id).
 
--spec get_process_with_running(storage_opts(), namespace_id(), id(), history_range()) ->
+-spec get_process_with_initialization(storage_opts(), namespace_id(), id(), history_range()) ->
     {ok, process()} | {error, _Reason}.
-get_process_with_running(#{client := Handler, options := HandlerOpts}, NsId, ProcessId, HistoryRange) ->
-    Handler:get_process_with_running(HandlerOpts, NsId, ProcessId, HistoryRange).
+get_process_with_initialization(#{client := Handler, options := HandlerOpts}, NsId, ProcessId, HistoryRange) ->
+    Handler:get_process_with_initialization(HandlerOpts, NsId, ProcessId, HistoryRange).
 
 -spec prepare_init(storage_opts(), namespace_id(), id(), task()) ->
     {ok, {postpone, task_id()} | {continue, task_id()}} | {error, _Reason}.
