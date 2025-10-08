@@ -87,7 +87,7 @@ init([DbOpts, ReplSlot, NsIDs]) ->
     ),
     ok = epgsql:close(Connection),
     {ok, Tables} = create_tables(NsIDs),
-    {ok, Reader} = epg_wal_reader:subscription_create({?MODULE, self()}, DbOpts, ReplSlot, Publications),
+    {ok, Reader} = epg_wal_reader:subscribe({?MODULE, self()}, DbOpts, ReplSlot, Publications),
     {ok, #{
         db_opts => DbOpts,
         repl_slot => ReplSlot,
@@ -108,9 +108,7 @@ handle_cast({handle_replication_data, ReplData}, State) ->
     NewState = lists:foldl(
         fun(ReplUnit, Acc) -> process_operation(ReplUnit, Acc) end,
         State,
-        %% NOTE transaction as stack (first operation -> last element)
-        %% need check
-        lists:reverse(ReplData)
+        ReplData
     ),
     {noreply, NewState};
 handle_cast({handle_replication_stop, _ReplStop}, State) ->
@@ -129,7 +127,7 @@ handle_info({timeout, _TRef, restart_replication}, State) ->
         publications := Publications
     } = State,
     maybe
-        {ok, Reader} ?= epg_wal_reader:subscription_create({?MODULE, self()}, DbOpts, ReplSlot, Publications),
+        {ok, Reader} ?= epg_wal_reader:subscribe({?MODULE, self()}, DbOpts, ReplSlot, Publications),
         {noreply, State#{wal_reader => Reader}}
     else
         Error ->
@@ -238,11 +236,11 @@ do_get(NsID, ProcessID, HistoryRange) ->
             {ok, Process#{history => Events, last_event_id => LastEventID, range => HistoryRange}}
     end.
 
-process_operation({Table, _, _} = ReplData, State) ->
+process_operation({Table, _, _, _} = ReplData, State) ->
     [NsBin, Object] = string:split(Table, <<"_">>, trailing),
     process_operation(Object, binary_to_atom(NsBin), ReplData, State).
 
-process_operation(<<"processes">>, NsID, {_Table, insert, #{<<"process_id">> := ProcessID} = Row}, State) ->
+process_operation(<<"processes">>, NsID, {_Table, insert, #{<<"process_id">> := ProcessID} = Row, _}, State) ->
     %% process created
     #{
         processes := ProcessesTable,
@@ -250,7 +248,7 @@ process_operation(<<"processes">>, NsID, {_Table, insert, #{<<"process_id">> := 
     } = tables(NsID),
     true = ets:insert(ProcessesTable, {ProcessID, Row}),
     reset_timer([ProcessesTable, EventsTable], ProcessID, State);
-process_operation(<<"events">>, NsID, {_Table, insert, #{<<"process_id">> := ProcessID} = Row}, State) ->
+process_operation(<<"events">>, NsID, {_Table, insert, #{<<"process_id">> := ProcessID} = Row, _}, State) ->
     #{
         processes := ProcessesTable,
         events := EventsTable
@@ -264,7 +262,7 @@ process_operation(<<"events">>, NsID, {_Table, insert, #{<<"process_id">> := Pro
             %% old process, not cached, ignore
             State
     end;
-process_operation(_, NsID, {Table, update, #{<<"process_id">> := ProcessID} = Row}, State) ->
+process_operation(_, NsID, {Table, update, #{<<"process_id">> := ProcessID} = Row, _}, State) ->
     TableETS = binary_to_atom(Table),
     case ets:lookup(TableETS, ProcessID) of
         [{_, OldRow}] ->
@@ -277,7 +275,7 @@ process_operation(_, NsID, {Table, update, #{<<"process_id">> := ProcessID} = Ro
         [] ->
             State
     end;
-process_operation(_Object, _NsID, {Table, delete, #{<<"process_id">> := ProcessID}}, State) ->
+process_operation(_Object, _NsID, {Table, delete, #{<<"process_id">> := ProcessID}, _}, State) ->
     TableETS = binary_to_atom(Table),
     true = ets:delete(TableETS, ProcessID),
     State;
