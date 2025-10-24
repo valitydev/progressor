@@ -5,6 +5,9 @@
 -export([db_init/2]).
 -export([cleanup/2]).
 
+%-define(TBL_PROC(NS), "\"" ++ erlang:atom_to_list(NsId) ++ "_processes" ++ "\"").
+%-define(TBL_PROC_STR(NS), "'" ++ erlang:atom_to_list(NsId) ++ "_processes" ++ "'").
+
 -spec db_init(prg_pg_backend:pg_opts(), namespace_id()) -> ok.
 db_init(#{pool := Pool}, NsId) ->
     #{
@@ -181,6 +184,7 @@ db_init(#{pool := Pool}, NsId) ->
             ),
 
             %% MIGRATIONS
+            %% MIGRATION 1
             %% migrate process_id to varchar 256
             ok = lists:foreach(
                 fun(T) ->
@@ -202,6 +206,42 @@ db_init(#{pool := Pool}, NsId) ->
                 end,
                 [ProcessesTable, TaskTable, ScheduleTable, RunningTable, EventsTable]
             ),
+            %% MIGRATION 2
+            %% add previous_status, status_changed_at to processes table and set values
+            ProcessesTableStr = string:replace(ProcessesTable, "\"", "'", all),
+            {ok, _, [{IsPrevStatusExists}]} = epg_pool:query(
+                Connection,
+                "SELECT exists (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' "
+                "  AND table_name = " ++ ProcessesTableStr ++ " AND column_name = 'previous_status')"
+            ),
+            _ =
+                case IsPrevStatusExists of
+                    true ->
+                        ok;
+                    false ->
+                        %% create columns
+                        {ok, _, _} = epg_pool:query(
+                            Connection,
+                            "ALTER TABLE " ++ ProcessesTable ++
+                                "  ADD COLUMN previous_status process_status, "
+                                "  ADD COLUMN status_changed_at TIMESTAMP WITH TIME ZONE"
+                        ),
+                        %% set values
+                        {ok, _} = epg_pool:query(
+                            Connection,
+                            "UPDATE " ++ ProcessesTable ++
+                                " SET previous_status = status, status_changed_at = created_at"
+                        ),
+                        %% set NOT NULL constraint
+                        {ok, _, _} = epg_pool:query(
+                            Connection,
+                            "ALTER TABLE " ++ ProcessesTable ++
+                                "  ALTER COLUMN previous_status SET NOT NULL,"
+                                "  ALTER COLUMN status_changed_at SET NOT NULL"
+                        )
+                end,
+
+            %%% END
             {ok, [], []}
         end
     ),

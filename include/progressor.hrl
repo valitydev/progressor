@@ -1,6 +1,18 @@
 %%%
 %%% Base entities
 %%%
+
+-define(CLEAR_PROCESS_KEYS, [
+    process_id,
+    status,
+    detail,
+    aux_state,
+    metadata,
+    corrupted_by,
+    previous_status,
+    status_changed_at
+]).
+
 -type process() :: #{
     process_id := id(),
     status := process_status(),
@@ -11,7 +23,9 @@
     corrupted_by => task_id(),
     range => history_range(),
     last_event_id => event_id(),
-    initialization => task_id()
+    initialization => task_id(),
+    previous_status => process_status(),
+    status_changed_at => timestamp_sec()
 }.
 
 -type task() :: #{
@@ -134,6 +148,11 @@
     direction => forward | backward
 }.
 
+-type process_updates() :: #{
+    process_id := id(),
+    _ => _
+}.
+
 -type processor_intent() :: #{
     events := [event()],
     action => action(),
@@ -196,5 +215,8 @@
 
 -define(NEW_PROCESS(ID), #{
     process_id => ProcessId,
-    status => <<"running">>
+    status => <<"running">>,
+    previous_status => <<"running">>,
+    created_at => erlang:system_time(second),
+    status_changed_at => erlang:system_time(second)
 }).
