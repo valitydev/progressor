@@ -78,7 +78,7 @@ get_process_with_initialization(#{client := Handler, options := HandlerOpts}, Ns
 -spec prepare_init(storage_opts(), namespace_id(), id(), task()) ->
     {ok, {postpone, task_id()} | {continue, task_id()}} | {error, _Reason}.
 prepare_init(#{client := Handler, options := HandlerOpts}, NsId, ProcessId, InitTask) ->
-    Handler:prepare_init(HandlerOpts, NsId, ?NEW_PROCESS(ProcessId), InitTask).
+    Handler:prepare_init(HandlerOpts, NsId, ProcessId, InitTask).
 
 -spec prepare_call(storage_opts(), namespace_id(), id(), task()) ->
     {ok, {postpone, task_id()} | {continue, task_id()}} | {error, _Error}.
@@ -112,31 +112,31 @@ collect_zombies(#{client := Handler, options := HandlerOpts}, NsId, Timeout) ->
 %%%%%%%%%%%%%%%%%%%
 
 -spec complete_and_continue(
-    storage_opts(), namespace_id(), task_result(), process(), [event()], task()
+    storage_opts(), namespace_id(), task_result(), process_updates(), [event()], task()
 ) ->
     {ok, [task()]}.
 complete_and_continue(
-    #{client := Handler, options := HandlerOpts}, NsId, TaskResult, Process, Events, NextTask
+    #{client := Handler, options := HandlerOpts}, NsId, TaskResult, ProcessUpdates, Events, NextTask
 ) ->
-    Handler:complete_and_continue(HandlerOpts, NsId, TaskResult, Process, Events, NextTask).
+    Handler:complete_and_continue(HandlerOpts, NsId, TaskResult, ProcessUpdates, Events, NextTask).
 
--spec complete_and_suspend(storage_opts(), namespace_id(), task_result(), process(), [event()]) ->
+-spec complete_and_suspend(storage_opts(), namespace_id(), task_result(), process_updates(), [event()]) ->
     {ok, [task()]}.
 complete_and_suspend(
-    #{client := Handler, options := HandlerOpts}, NsId, TaskResult, Process, Events
+    #{client := Handler, options := HandlerOpts}, NsId, TaskResult, ProcessUpdates, Events
 ) ->
-    Handler:complete_and_suspend(HandlerOpts, NsId, TaskResult, Process, Events).
+    Handler:complete_and_suspend(HandlerOpts, NsId, TaskResult, ProcessUpdates, Events).
 
--spec complete_and_error(storage_opts(), namespace_id(), task_result(), process()) -> ok.
-complete_and_error(#{client := Handler, options := HandlerOpts}, NsId, TaskResult, Process) ->
-    Handler:complete_and_error(HandlerOpts, NsId, TaskResult, Process).
+-spec complete_and_error(storage_opts(), namespace_id(), task_result(), process_updates()) -> ok.
+complete_and_error(#{client := Handler, options := HandlerOpts}, NsId, TaskResult, ProcessUpdates) ->
+    Handler:complete_and_error(HandlerOpts, NsId, TaskResult, ProcessUpdates).
 
--spec complete_and_unlock(storage_opts(), namespace_id(), task_result(), process(), [event()]) ->
+-spec complete_and_unlock(storage_opts(), namespace_id(), task_result(), process_updates(), [event()]) ->
     {ok, [task()]}.
 complete_and_unlock(
-    #{client := Handler, options := HandlerOpts}, NsId, TaskResult, Process, Events
+    #{client := Handler, options := HandlerOpts}, NsId, TaskResult, ProcessUpdates, Events
 ) ->
-    Handler:complete_and_unlock(HandlerOpts, NsId, TaskResult, Process, Events).
+    Handler:complete_and_unlock(HandlerOpts, NsId, TaskResult, ProcessUpdates, Events).
 
 -spec remove_process(storage_opts(), namespace_id(), id()) -> ok | no_return().
 remove_process(#{client := Handler, options := HandlerOpts}, NsId, ProcessId) ->

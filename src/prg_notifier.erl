@@ -40,6 +40,7 @@ lifecycle_sink(
     TaskType =:= init;
     TaskType =:= repair;
     TaskType =:= remove;
+    %% {error, Reason}
     erlang:is_tuple(TaskType)
 ->
     Batch = encode(fun serialize_lifecycle/3, NS, ID, [lifecycle_event(TaskType)]),
@@ -96,7 +97,7 @@ serialize_eventsink(SourceNS, SourceID, Event) ->
             source_id = SourceID,
             event_id = EventID,
             created_at = serialize_timestamp(Timestamp),
-            format_version = maps:get(format_version, Metadata, undefined),
+            format_version = maps:get(<<"format_version">>, Metadata, undefined),
             data = Content
         }},
     Type = {struct, union, {mg_proto_event_sink_thrift, 'SinkEvent'}},

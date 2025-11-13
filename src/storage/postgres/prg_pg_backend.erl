@@ -382,9 +382,9 @@ search_calls(PgOpts, NsId, Limit) ->
     ),
     to_maps(Columns, Rows, fun marshal_task/1).
 
--spec prepare_init(pg_opts(), namespace_id(), process(), task()) ->
+-spec prepare_init(pg_opts(), namespace_id(), id(), task()) ->
     {ok, {postpone, task_id()} | {continue, task_id()}} | {error, _Reason}.
-prepare_init(PgOpts, NsId, Process, Task) ->
+prepare_init(PgOpts, NsId, ProcessId, Task) ->
     Pool = get_pool(external, PgOpts),
     #{
         processes := ProcessesTable,
@@ -392,6 +392,7 @@ prepare_init(PgOpts, NsId, Process, Task) ->
         schedule := ScheduleTable,
         running := RunningTable
     } = prg_pg_utils:tables(NsId),
+    Process = ?NEW_PROCESS(ProcessId),
     epg_pool:transaction(
         Pool,
         fun(Connection) ->
@@ -487,9 +488,9 @@ prepare_repair(PgOpts, NsId, _ProcessId, #{status := <<"running">>} = Task) ->
         end
     ).
 
--spec complete_and_continue(pg_opts(), namespace_id(), task_result(), process(), [event()], task()) ->
+-spec complete_and_continue(pg_opts(), namespace_id(), task_result(), process_updates(), [event()], task()) ->
     {ok, [task()]}.
-complete_and_continue(PgOpts, NsId, TaskResult, Process, Events, NextTask) ->
+complete_and_continue(PgOpts, NsId, TaskResult, ProcessUpdates, Events, NextTask) ->
     % update completed task and process,
     % cancel blocked and waiting timers,
     % save new timer,
@@ -503,11 +504,11 @@ complete_and_continue(PgOpts, NsId, TaskResult, Process, Events, NextTask) ->
         events := EventsTable
     } = prg_pg_utils:tables(NsId),
     #{task_id := TaskId} = TaskResult,
-    #{process_id := ProcessId} = Process,
+    #{process_id := ProcessId} = ProcessUpdates,
     {ok, _, Columns, Rows} = epg_pool:transaction(
         Pool,
         fun(Connection) ->
-            {ok, _} = do_update_process(Connection, ProcessesTable, Process),
+            {ok, _} = do_update_process(Connection, ProcessesTable, ProcessUpdates),
             %% TODO implement via batch execute
             lists:foreach(
                 fun(Ev) ->
@@ -553,9 +554,9 @@ complete_and_continue(PgOpts, NsId, TaskResult, Process, Events, NextTask) ->
     ),
     {ok, to_maps(Columns, Rows, fun marshal_task/1)}.
 
--spec complete_and_suspend(pg_opts(), namespace_id(), task_result(), process(), [event()]) ->
+-spec complete_and_suspend(pg_opts(), namespace_id(), task_result(), process_updates(), [event()]) ->
     {ok, [task()]}.
-complete_and_suspend(PgOpts, NsId, TaskResult, Process, Events) ->
+complete_and_suspend(PgOpts, NsId, TaskResult, ProcessUpdates, Events) ->
     % update completed task and process, cancel blocked and waiting timers
     Pool = get_pool(internal, PgOpts),
     #{
@@ -566,11 +567,11 @@ complete_and_suspend(PgOpts, NsId, TaskResult, Process, Events) ->
         events := EventsTable
     } = prg_pg_utils:tables(NsId),
     #{task_id := TaskId} = TaskResult,
-    #{process_id := ProcessId} = Process,
+    #{process_id := ProcessId} = ProcessUpdates,
     {ok, _, Columns, Rows} = epg_pool:transaction(
         Pool,
         fun(Connection) ->
-            {ok, _} = do_update_process(Connection, ProcessesTable, Process),
+            {ok, _} = do_update_process(Connection, ProcessesTable, ProcessUpdates),
             lists:foreach(
                 fun(Ev) ->
                     {ok, _} = do_save_event(Connection, EventsTable, ProcessId, TaskId, Ev)
@@ -583,8 +584,8 @@ complete_and_suspend(PgOpts, NsId, TaskResult, Process, Events) ->
     ),
     {ok, to_maps(Columns, Rows, fun marshal_task/1)}.
 
--spec complete_and_error(pg_opts(), namespace_id(), task_result(), process()) -> ok.
-complete_and_error(PgOpts, NsId, TaskResult, Process) ->
+-spec complete_and_error(pg_opts(), namespace_id(), task_result(), process_updates()) -> ok.
+complete_and_error(PgOpts, NsId, TaskResult, ProcessUpdates) ->
     Pool = get_pool(internal, PgOpts),
     #{
         processes := ProcessesTable,
@@ -592,11 +593,11 @@ complete_and_error(PgOpts, NsId, TaskResult, Process) ->
         schedule := ScheduleTable,
         running := RunningTable
     } = prg_pg_utils:tables(NsId),
-    #{process_id := ProcessId} = Process,
-    epg_pool:transaction(
+    #{process_id := ProcessId} = ProcessUpdates,
+    {ok, _, _, _} = epg_pool:transaction(
         Pool,
         fun(Connection) ->
-            {ok, 1} = do_update_process(Connection, ProcessesTable, Process),
+            {ok, _} = do_update_process(Connection, ProcessesTable, ProcessUpdates),
             {ok, _, _} = do_cancel_timer(Connection, TaskTable, ScheduleTable, ProcessId),
             {ok, _, _} = do_cancel_calls(Connection, TaskTable, ScheduleTable, ProcessId),
             {ok, _, _, _} = do_complete_task(
@@ -610,9 +611,9 @@ complete_and_error(PgOpts, NsId, TaskResult, Process) ->
     ),
     ok.
 
--spec complete_and_unlock(pg_opts(), namespace_id(), task_result(), process(), [event()]) ->
+-spec complete_and_unlock(pg_opts(), namespace_id(), task_result(), process_updates(), [event()]) ->
     {ok, [task()]}.
-complete_and_unlock(PgOpts, NsId, TaskResult, Process, Events) ->
+complete_and_unlock(PgOpts, NsId, TaskResult, ProcessUpdates, Events) ->
     % update completed task and process, unlock blocked task
     Pool = get_pool(internal, PgOpts),
     #{
@@ -623,11 +624,11 @@ complete_and_unlock(PgOpts, NsId, TaskResult, Process, Events) ->
         events := EventsTable
     } = prg_pg_utils:tables(NsId),
     #{task_id := TaskId} = TaskResult,
-    #{process_id := ProcessId} = Process,
+    #{process_id := ProcessId} = ProcessUpdates,
     {ok, _, Columns, Rows} = epg_pool:transaction(
         Pool,
         fun(Connection) ->
-            {ok, _} = do_update_process(Connection, ProcessesTable, Process),
+            {ok, _} = do_update_process(Connection, ProcessesTable, ProcessUpdates),
             lists:foreach(
                 fun(Ev) ->
                     {ok, _} = do_save_event(Connection, EventsTable, ProcessId, TaskId, Ev)
@@ -753,10 +754,17 @@ do_save_process(Connection, Table, Process) ->
     Detail = maps:get(detail, Process, null),
     AuxState = maps:get(aux_state, Process, null),
     Meta = maps:get(metadata, Process, null),
+    CreatedAtTs = maps:get(created_at, Process, erlang:system_time(second)),
+    CreatedAt = unixtime_to_datetime(CreatedAtTs),
+    PreviousStatus = maps:get(previous_status, Process, Status),
+    StatusChangedAt = unixtime_to_datetime(maps:get(status_changed_at, Process, CreatedAtTs)),
     epg_pool:query(
         Connection,
-        "INSERT INTO " ++ Table ++ " (process_id, status, detail, aux_state, metadata) VALUES ($1, $2, $3, $4, $5)",
-        [ProcessId, Status, Detail, AuxState, json_encode(Meta)]
+        "INSERT INTO " ++ Table ++
+            " "
+            "  (process_id, status, detail, aux_state, metadata, created_at, previous_status, status_changed_at) "
+            "  VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+        [ProcessId, Status, Detail, AuxState, json_encode(Meta), CreatedAt, PreviousStatus, StatusChangedAt]
     ).
 
 maybe_schedule_task(_Connection, _TaskTable, _ScheduleTable, undefined) ->
@@ -910,21 +918,55 @@ do_get_task(Connection, Table, TaskId) ->
     ).
 
 do_update_process(Connection, ProcessesTable, Process) ->
-    #{
-        process_id := ProcessId,
-        status := Status
-    } = Process,
-    Detail = maps:get(detail, Process, null),
-    AuxState = maps:get(aux_state, Process, null),
-    MetaData = maps:get(metadata, Process, null),
-    CorruptedBy = maps:get(corrupted_by, Process, null),
-    epg_pool:query(
-        Connection,
-        "UPDATE " ++ ProcessesTable ++
-            " SET status = $1, detail = $2, aux_state = $3, metadata = $4, corrupted_by = $5 "
-            "WHERE process_id = $6",
-        [Status, Detail, AuxState, json_encode(MetaData), CorruptedBy, ProcessId]
-    ).
+    {ProcessId, Updates} = maps:take(process_id, Process),
+    {SQL, Params} = construct_process_update_req(ProcessesTable, ProcessId, maps:with(?CLEAR_PROCESS_KEYS, Updates)),
+    case Params of
+        [] ->
+            {ok, 0};
+        _ ->
+            epg_pool:query(
+                Connection,
+                SQL,
+                Params
+            )
+    end.
+
+construct_process_update_req(_ProcessesTable, _ProcessId, Updates) when map_size(Updates) =:= 0 ->
+    {"", []};
+construct_process_update_req(ProcessesTable, ProcessId, Updates) ->
+    InitSql = "UPDATE " ++ ProcessesTable ++ " SET ",
+    {SQL0, Params0, Counter0} = maps:fold(
+        fun(Key, Value, {SQL, Params, ParamsCount}) ->
+            Next = ParamsCount + 1,
+            Pos = "$" ++ erlang:integer_to_list(Next),
+            Lead =
+                case ParamsCount of
+                    0 -> " ";
+                    _ -> ", "
+                end,
+            {
+                SQL ++ Lead ++ erlang:atom_to_list(Key) ++ " = " ++ Pos,
+                Params ++ [convert_process_updates(Key, Value)],
+                Next
+            }
+        end,
+        {InitSql, [], 0},
+        Updates
+    ),
+    LastPos = "$" ++ erlang:integer_to_list(Counter0 + 1),
+    {
+        SQL0 ++ " WHERE process_id = " ++ LastPos,
+        Params0 ++ [ProcessId]
+    }.
+
+convert_process_updates(_Key, undefined) ->
+    null;
+convert_process_updates(metadata, Value) ->
+    json_encode(Value);
+convert_process_updates(Key, Value) when Key =:= created_at; Key =:= status_changed_at ->
+    unixtime_to_datetime(Value);
+convert_process_updates(_Key, Value) ->
+    Value.
 
 do_save_event(Connection, EventsTable, ProcessId, TaskId, Event) ->
     #{
@@ -1148,6 +1190,7 @@ marshal_process(Process) ->
             (<<"metadata">>, Meta, Acc) -> Acc#{metadata => Meta};
             (<<"corrupted_by">>, CorruptedBy, Acc) -> Acc#{corrupted_by => CorruptedBy};
             (<<"initialization">>, TaskId, Acc) -> Acc#{initialization => TaskId};
+            (<<"previous_status">>, PrevStatus, Acc) -> Acc#{previous_status => PrevStatus};
             (_, _, Acc) -> Acc
         end,
         #{},

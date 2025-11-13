@@ -62,16 +62,16 @@ process(Pid, Deadline, #{namespace := NS} = NsOpts, {TaskType, _, _} = Request, 
     storage_opts(),
     namespace_id(),
     task_result(),
-    process(),
+    process_updates(),
     [event()],
     task()
 ) -> {ok, [task()]} | no_return().
-complete_and_continue(Pid, _Deadline, StorageOpts, NsId, TaskResult, Process, Events, Task) ->
+complete_and_continue(Pid, _Deadline, StorageOpts, NsId, TaskResult, ProcessUpdates, Events, Task) ->
     %% Timeout = Deadline - erlang:system_time(millisecond),
     Fun = fun() ->
         gen_server:call(
             Pid,
-            {complete_and_continue, StorageOpts, NsId, TaskResult, Process, Events, Task},
+            {complete_and_continue, StorageOpts, NsId, TaskResult, ProcessUpdates, Events, Task},
             infinity
         )
     end,
@@ -85,15 +85,15 @@ complete_and_continue(Pid, _Deadline, StorageOpts, NsId, TaskResult, Process, Ev
     storage_opts(),
     namespace_id(),
     task_result(),
-    process(),
+    process_updates(),
     [event()]
 ) -> {ok, [task()]} | no_return().
-complete_and_suspend(Pid, _Deadline, StorageOpts, NsId, TaskResult, Process, Events) ->
+complete_and_suspend(Pid, _Deadline, StorageOpts, NsId, TaskResult, ProcessUpdates, Events) ->
     %% Timeout = Deadline - erlang:system_time(millisecond),
     Fun = fun() ->
         gen_server:call(
             Pid,
-            {complete_and_suspend, StorageOpts, NsId, TaskResult, Process, Events},
+            {complete_and_suspend, StorageOpts, NsId, TaskResult, ProcessUpdates, Events},
             infinity
         )
     end,
@@ -105,30 +105,30 @@ complete_and_suspend(Pid, _Deadline, StorageOpts, NsId, TaskResult, Process, Eve
     storage_opts(),
     namespace_id(),
     task_result(),
-    process(),
+    process_updates(),
     [event()]
 ) -> {ok, [task()]} | no_return().
-complete_and_unlock(Pid, _Deadline, StorageOpts, NsId, TaskResult, Process, Events) ->
+complete_and_unlock(Pid, _Deadline, StorageOpts, NsId, TaskResult, ProcessUpdates, Events) ->
     %% Timeout = Deadline - erlang:system_time(millisecond),
     Fun = fun() ->
         gen_server:call(
             Pid,
-            {complete_and_unlock, StorageOpts, NsId, TaskResult, Process, Events},
+            {complete_and_unlock, StorageOpts, NsId, TaskResult, ProcessUpdates, Events},
             infinity
         )
     end,
     prg_utils:with_observe(Fun, ?COMPLETION_KEY, [erlang:atom_to_list(NsId), "complete_and_unlock"]).
 
 -spec complete_and_error(
-    pid(), timestamp_ms(), storage_opts(), namespace_id(), task_result(), process()
+    pid(), timestamp_ms(), storage_opts(), namespace_id(), task_result(), process_updates()
 ) ->
     ok | no_return().
-complete_and_error(Pid, _Deadline, StorageOpts, NsId, TaskResult, Process) ->
+complete_and_error(Pid, _Deadline, StorageOpts, NsId, TaskResult, ProcessUpdates) ->
     %% Timeout = Deadline - erlang:system_time(millisecond),
     Fun = fun() ->
         gen_server:call(
             Pid,
-            {complete_and_error, StorageOpts, NsId, TaskResult, Process},
+            {complete_and_error, StorageOpts, NsId, TaskResult, ProcessUpdates},
             infinity
         )
     end,
