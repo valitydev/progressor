@@ -935,10 +935,10 @@ construct_process_update_req(_ProcessesTable, _ProcessId, Updates) when map_size
     {"", []};
 construct_process_update_req(ProcessesTable, ProcessId, Updates) ->
     InitSql = "UPDATE " ++ ProcessesTable ++ " SET ",
-    {SQL0, Params0} = maps:fold(
-        fun(Key, Value, {SQL, Params}) ->
-            ParamsCount = erlang:length(Params),
-            Pos = "$" ++ erlang:integer_to_list(ParamsCount + 1),
+    {SQL0, Params0, Counter0} = maps:fold(
+        fun(Key, Value, {SQL, Params, ParamsCount}) ->
+            Next = ParamsCount + 1,
+            Pos = "$" ++ erlang:integer_to_list(Next),
             Lead =
                 case ParamsCount of
                     0 -> " ";
@@ -946,13 +946,14 @@ construct_process_update_req(ProcessesTable, ProcessId, Updates) ->
                 end,
             {
                 SQL ++ Lead ++ erlang:atom_to_list(Key) ++ " = " ++ Pos,
-                Params ++ [convert_process_updates(Key, Value)]
+                Params ++ [convert_process_updates(Key, Value)],
+                Next
             }
         end,
-        {InitSql, []},
+        {InitSql, [], 0},
         Updates
     ),
-    LastPos = "$" ++ erlang:integer_to_list(erlang:length(Params0) + 1),
+    LastPos = "$" ++ erlang:integer_to_list(Counter0 + 1),
     {
         SQL0 ++ " WHERE process_id = " ++ LastPos,
         Params0 ++ [ProcessId]
