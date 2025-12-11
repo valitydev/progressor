@@ -88,12 +88,11 @@ simple_repair(Req) ->
         [
             fun add_ns_opts/1,
             fun check_idempotency/1,
-            fun(Data) -> check_process_status(Data, <<"error">>) end,
-            fun add_task/1,
+            fun check_process_continuation/1,
             fun(Data) -> prepare_postponed(fun prg_storage:prepare_call/4, Data) end,
-            fun(_Data) -> {ok, ok} end
+            fun do_simple_repair/1
         ],
-        Req#{type => timeout}
+        Req
     ).
 
 -spec get(request()) -> {ok, _Result} | {error, _Reason}.
@@ -205,6 +204,33 @@ check_process_status(
         {error, _} = Error -> Error
     end.
 
+check_process_continuation(
+    #{ns_opts := #{storage := StorageOpts}, id := Id, ns := NsId} = Opts
+) ->
+    case prg_storage:get_process(external, StorageOpts, NsId, Id, #{limit => 0}) of
+        {ok, #{status := <<"running">>}} ->
+            {error, <<"process is running">>};
+        {ok, #{status := <<"error">>, corrupted_by := TaskId}} when is_integer(TaskId) ->
+            case prg_storage:get_task(external, StorageOpts, NsId, TaskId) of
+                {ok, #{task_type := Type}} when Type =:= <<"timeout">>; Type =:= <<"remove">> ->
+                    add_task(Opts#{type => Type});
+                {ok, _} ->
+                    Opts
+            end;
+        {ok, #{status := <<"error">>}} ->
+            Opts;
+        {error, _} = Error ->
+            Error
+    end.
+
+do_simple_repair(#{task := _}) ->
+    %% process will repaired via timeout task
+    {ok, ok};
+do_simple_repair(#{ns_opts := #{storage := StorageOpts} = NsOpts, id := Id, ns := NsId}) ->
+    ok = prg_storage:repair_process(StorageOpts, NsId, Id),
+    ok = prg_notifier:lifecycle_sink(NsOpts, repair, Id),
+    {ok, ok}.
+
 prepare(
     Fun,
     #{ns_opts := #{storage := StorageOpts} = NsOpts, ns := NsId, id := ProcessId, task := Task} =
@@ -251,7 +277,10 @@ prepare_postponed(
             Req#{task => Task#{task_id => TaskId}};
         {error, _} = Error ->
             Error
-    end.
+    end;
+prepare_postponed(_Fun, Req) ->
+    %% Req without task, skip this step
+    Req.
 
 get_task_result(#{
     ns_opts := #{storage := StorageOpts} = NsOpts, ns := NsId, idempotency_key := IdempotencyKey
@@ -377,7 +406,9 @@ convert_task_type(notify) ->
 convert_task_type(timeout) ->
     <<"timeout">>;
 convert_task_type(repair) ->
-    <<"repair">>.
+    <<"repair">>;
+convert_task_type(Type) when is_binary(Type) ->
+    Type.
 
 maybe_add_idempotency(Task, undefined) ->
     Task;
