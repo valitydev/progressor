@@ -12,6 +12,7 @@
 -export([put_process_data/4]).
 -export([process_trace/3]).
 -export([get_process_with_initialization/4]).
+-export([repair_process/3]).
 
 %% scan functions
 -export([search_timers/4]).
@@ -89,6 +90,10 @@ prepare_call(#{client := Handler, options := HandlerOpts}, NsId, ProcessId, Task
     {ok, {postpone, task_id()} | {continue, task_id()}} | {error, _Reason}.
 prepare_repair(#{client := Handler, options := HandlerOpts}, NsId, ProcessId, RepairTask) ->
     Handler:prepare_repair(HandlerOpts, NsId, ProcessId, RepairTask).
+
+-spec repair_process(storage_opts(), namespace_id(), id()) -> ok | no_return().
+repair_process(#{client := Handler, options := HandlerOpts}, NsId, ProcessId) ->
+    Handler:repair_process(HandlerOpts, NsId, ProcessId).
 
 %%%%%%%%%%%%%%%%%
 %% Scan functions

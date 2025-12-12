@@ -130,7 +130,7 @@
 
 -type history_range() :: #{
     offset => non_neg_integer(),
-    limit => pos_integer(),
+    limit => non_neg_integer(),
     direction => forward | backward
 }.
 

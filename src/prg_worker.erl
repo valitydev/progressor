@@ -171,14 +171,15 @@ handle_result(
     #prg_worker_state{
         ns_id = NsId,
         ns_opts = #{storage := StorageOpts} = NsOpts,
-        process = #{process_id := ProcessId} = Process,
+        process = #{process_id := ProcessId, status := OldStatus} = Process,
         sidecar_pid = Pid
     } = State
 ) ->
     Now = erlang:system_time(second),
-    ProcessUpdated = update_process(
-        maps:without([detail, corrupted_by], Process#{status => <<"running">>}), Result
-    ),
+    #{status := NewStatus} =
+        ProcessUpdated = update_process(
+            maps:without([detail, corrupted_by], Process#{status => <<"running">>}), Result
+        ),
     Response = response(maps:get(response, Result, undefined)),
     TaskResult = #{
         task_id => TaskId,
@@ -196,7 +197,7 @@ handle_result(
         attempts_count => 0
     },
     ok = prg_worker_sidecar:lifecycle_sink(
-        Pid, Deadline, NsOpts, extract_task_type(TaskHeader), ProcessId
+        Pid, Deadline, NsOpts, lifecycle_event(TaskHeader, OldStatus, NewStatus), ProcessId
     ),
     ok = prg_worker_sidecar:event_sink(Pid, Deadline, NsOpts, ProcessId, Events),
     SaveResult = prg_worker_sidecar:complete_and_continue(
@@ -249,17 +250,18 @@ handle_result(
     #prg_worker_state{
         ns_id = NsId,
         ns_opts = #{storage := StorageOpts} = NsOpts,
-        process = #{process_id := ProcessId} = Process,
+        process = #{process_id := ProcessId, status := OldStatus} = Process,
         sidecar_pid = Pid
     } = State
 ) ->
+    #{status := NewStatus} =
+        ProcessUpdated = update_process(
+            maps:without([detail, corrupted_by], Process#{status => <<"running">>}), Result
+        ),
     ok = prg_worker_sidecar:lifecycle_sink(
-        Pid, Deadline, NsOpts, extract_task_type(TaskHeader), ProcessId
+        Pid, Deadline, NsOpts, lifecycle_event(TaskHeader, OldStatus, NewStatus), ProcessId
     ),
     ok = prg_worker_sidecar:event_sink(Pid, Deadline, NsOpts, ProcessId, Events),
-    ProcessUpdated = update_process(
-        maps:without([detail, corrupted_by], Process#{status => <<"running">>}), Result
-    ),
     Response = response(maps:get(response, Result, undefined)),
     TaskResult = #{
         task_id => TaskId,
@@ -303,7 +305,7 @@ handle_result(
 ) ->
     Now = erlang:system_time(second),
     ok = prg_worker_sidecar:lifecycle_sink(
-        Pid, Deadline, NsOpts, extract_task_type(TaskHeader), ProcessId
+        Pid, Deadline, NsOpts, repair, ProcessId
     ),
     ok = prg_worker_sidecar:event_sink(Pid, Deadline, NsOpts, ProcessId, Events),
     ProcessUpdated = update_process(
@@ -368,17 +370,18 @@ handle_result(
     #prg_worker_state{
         ns_id = NsId,
         ns_opts = #{storage := StorageOpts} = NsOpts,
-        process = #{process_id := ProcessId} = Process,
+        process = #{process_id := ProcessId, status := OldStatus} = Process,
         sidecar_pid = Pid
     } = State
 ) ->
+    #{status := NewStatus} =
+        ProcessUpdated = update_process(
+            maps:without([detail, corrupted_by], Process#{status => <<"running">>}), Result
+        ),
     ok = prg_worker_sidecar:lifecycle_sink(
-        Pid, Deadline, NsOpts, extract_task_type(TaskHeader), ProcessId
+        Pid, Deadline, NsOpts, lifecycle_event(TaskHeader, OldStatus, NewStatus), ProcessId
     ),
     ok = prg_worker_sidecar:event_sink(Pid, Deadline, NsOpts, ProcessId, Events),
-    ProcessUpdated = update_process(
-        maps:without([detail, corrupted_by], Process#{status => <<"running">>}), Result
-    ),
     Response = response(maps:get(response, Result, undefined)),
     TaskResult = #{
         task_id => TaskId,
@@ -601,3 +604,10 @@ last_event_id([]) ->
 last_event_id(History) ->
     [#{event_id := Id} | _] = lists:reverse(History),
     Id.
+
+lifecycle_event({timeout, _}, <<"error">>, <<"running">>) ->
+    repair;
+lifecycle_event({timeout, _}, _, _) ->
+    timeout;
+lifecycle_event({TaskType, _}, _, _) ->
+    TaskType.
