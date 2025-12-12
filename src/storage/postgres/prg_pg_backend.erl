@@ -15,6 +15,7 @@
 -export([put_process_data/4]).
 -export([process_trace/3]).
 -export([get_process_with_initialization/4]).
+-export([repair_process/3]).
 
 %% scan functions
 -export([collect_zombies/3]).
@@ -162,6 +163,19 @@ get_process_with_initialization(PgOpts, NsId, ProcessId, HistoryRange) ->
         end
     ),
     parse_process_info(RawResult, HistoryRange).
+
+-spec repair_process(pg_opts(), namespace_id(), id()) -> ok | no_return().
+repair_process(PgOpts, NsId, ProcessId) ->
+    Pool = get_pool(external, PgOpts),
+    #{processes := ProcessesTable} = prg_pg_utils:tables(NsId),
+    {ok, 1} = epg_pool:query(
+        Pool,
+        "UPDATE " ++ ProcessesTable ++
+            " SET status = 'running', previous_status = 'error', corrupted_by = null, detail = null "
+            "WHERE process_id = $1",
+        [ProcessId]
+    ),
+    ok.
 
 -spec put_process_data(
     pg_opts(),
