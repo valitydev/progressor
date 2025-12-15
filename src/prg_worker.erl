@@ -570,12 +570,16 @@ extract_task_type({TaskType, _}) ->
 
 check_retryable(TaskHeader, #{last_retry_interval := LastInterval} = Task, RetryPolicy, Error) ->
     Now = erlang:system_time(second),
+    ProcessId = maps:get(process_id, Task),
     Timeout =
         case LastInterval =:= 0 of
             true -> maps:get(initial_timeout, RetryPolicy);
             false -> trunc(LastInterval * maps:get(backoff_coefficient, RetryPolicy))
         end,
     Attempts = maps:get(attempts_count, Task) + 1,
+    logger:info("check retryable ~p for error: ~p, last retry interval: ~p sec, attempt: ~p", [
+        ProcessId, Error, LastInterval, Attempts
+    ]),
     case is_retryable(Error, TaskHeader, RetryPolicy, Timeout, Attempts) of
         true ->
             maps:with(
@@ -601,7 +605,7 @@ check_retryable(TaskHeader, #{last_retry_interval := LastInterval} = Task, Retry
     end.
 
 %% machinegun legacy
--define(WOODY_ERROR(Class), {exception, _, {woody_error, Class, _}}).
+-define(WOODY_ERROR(Class), {exception, _, {woody_error, {_, Class, _}}}).
 -define(TEST_POLICY(Error, RetryPolicy, Timeout, Attempts),
     (Timeout < maps:get(max_timeout, RetryPolicy, infinity) andalso
         Attempts < maps:get(max_attempts, RetryPolicy, infinity) andalso

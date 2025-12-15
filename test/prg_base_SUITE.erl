@@ -578,7 +578,7 @@ error_after_max_retries_test(C) ->
     4 = expect_steps_counter(4),
     timer:sleep(?AWAIT_TIMEOUT(C)),
     {ok, #{
-        detail := <<"retry_this">>,
+        detail := <<"{exception,error,{woody_error,{external,result_unknown,<<\"closed\">>}}}">>,
         history := [],
         process_id := Id,
         status := <<"error">>
@@ -1220,7 +1220,7 @@ mock_processor(error_after_max_retries_test = TestCase) ->
         ({timeout, <<>>, #{history := []} = _Process}, _Opts, _Ctx) ->
             %% must be 3 attempts
             Self ! iterate,
-            {error, retry_this}
+            erlang:raise(error, {woody_error, {external, result_unknown, <<"closed">>}}, [])
     end,
     mock_processor(TestCase, MockProcessor);
 %%

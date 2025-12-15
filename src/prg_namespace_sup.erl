@@ -17,7 +17,12 @@
 -spec start_link({namespace_id(), namespace_opts()}) ->
     {ok, Pid :: pid()} | ignore | {error, Reason :: term()}.
 start_link({NsId, #{storage := StorageOpts}} = NS) ->
-    ok = prg_storage:db_init(StorageOpts, NsId),
+    case application:get_env(progressor, migration_enabled, true) of
+        true ->
+            ok = prg_storage:db_init(StorageOpts, NsId);
+        false ->
+            ok
+    end,
     RegName = prg_utils:registered_name(NsId, "_namespace_sup"),
     supervisor:start_link({local, RegName}, ?MODULE, NS).
 
