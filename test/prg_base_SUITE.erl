@@ -77,8 +77,8 @@ end_per_group(_, _) ->
 
 all() ->
     [
-        {group, base}
-        %{group, tasks_injection}
+        {group, base},
+        {group, tasks_injection}
         %% while race condition hack using cache not applicable
         %{group, cache}
     ].
