@@ -35,6 +35,7 @@ make_ns_opts(NsId, NsOpts) ->
         worker_pool_size => ?DEFAULT_WORKER_POOL_SIZE,
         process_step_timeout => ?DEFAULT_STEP_TIMEOUT_SEC,
         task_scan_timeout => (?DEFAULT_STEP_TIMEOUT_SEC div 2) + 1,
+        call_scan_timeout => ?DEFAULT_CALL_SCAN_TIMEOUT_SEC,
         last_timer_repair => false
     },
     ConfigDefaults = application:get_env(progressor, defaults, #{}),

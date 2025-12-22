@@ -18,10 +18,12 @@
 -export([process_task/3]).
 -export([continuation_task/3]).
 -export([next_task/1]).
+-export([process_scheduled_task/3]).
 
 -record(prg_worker_state, {ns_id, ns_opts, process, sidecar_pid}).
 
 -define(DEFAULT_RANGE, #{direction => forward}).
+-define(CAPTURE_DEFENSE_INTERVAL_MS, 100).
 
 %%%
 %%% API
@@ -38,6 +40,10 @@ continuation_task(Worker, TaskHeader, Task) ->
 -spec next_task(pid()) -> ok.
 next_task(Worker) ->
     gen_server:cast(Worker, next_task).
+
+-spec process_scheduled_task(pid(), id(), task_id()) -> ok.
+process_scheduled_task(Worker, ProcessId, TaskId) ->
+    gen_server:cast(Worker, {process_scheduled_task, ProcessId, TaskId}).
 
 %%%===================================================================
 %%% Spawning and gen_server implementation
@@ -90,6 +96,32 @@ handle_cast(
     Deadline = erlang:system_time(millisecond) + TimeoutSec * 1000,
     NewState = do_process_task(TaskHeader, Task, Deadline, State),
     {noreply, NewState};
+handle_cast(
+    {process_scheduled_task, ProcessId, TaskId},
+    #prg_worker_state{
+        ns_id = NsId,
+        ns_opts = #{storage := StorageOpts, process_step_timeout := TimeoutSec} = _NsOpts,
+        sidecar_pid = Pid
+    } = State
+) ->
+    try prg_storage:capture_task(StorageOpts, NsId, TaskId) of
+        [] ->
+            %% task cancelled, blocked, already running or finished
+            ok = next_task(self()),
+            {noreply, State};
+        [#{status := <<"running">>} = Task] ->
+            Deadline = erlang:system_time(millisecond) + TimeoutSec * 1000,
+            HistoryRange = maps:get(range, maps:get(metadata, Task, #{}), #{}),
+            {ok, Process} = prg_worker_sidecar:get_process(Pid, Deadline, StorageOpts, NsId, ProcessId, HistoryRange),
+            TaskHeader = create_header(Task),
+            NewState = do_process_task(TaskHeader, Task, Deadline, State#prg_worker_state{process = Process}),
+            {noreply, NewState}
+    catch
+        Class:Term:Stacktrace ->
+            logger:error("process ~p. task capturing exception: ~p", [ProcessId, [Class, Term, Stacktrace]]),
+            ok = next_task(self()),
+            {noreply, State}
+    end;
 handle_cast(next_task, #prg_worker_state{sidecar_pid = CurrentPid}) ->
     %% kill sidecar and restart to clear memory
     true = erlang:unlink(CurrentPid),
@@ -235,7 +267,9 @@ success_and_continue(Intent, TaskHeader, Task, Deadline, State) ->
     ),
     _ = maybe_reply(TaskHeader, Response),
     case SaveResult of
-        {ok, []} ->
+        {ok, [#{status := <<"waiting">>, task_id := NextTaskId, scheduled_time := Ts} | _]} ->
+            RunAfterMs = (Ts - Now) * 1000 - ?CAPTURE_DEFENSE_INTERVAL_MS,
+            ok = prg_scheduler:schedule_task(NsId, ProcessId, NextTaskId, RunAfterMs),
             ok = next_task(self()),
             State#prg_worker_state{process = undefined};
         {ok, [ContinuationTask | _]} ->
@@ -383,6 +417,7 @@ success_and_unlock(Intent, TaskHeader, Task, Deadline, State) ->
         process = #{process_id := ProcessId, status := OldStatus} = Process,
         sidecar_pid = Pid
     } = State,
+    Now = erlang:system_time(second),
     {#{status := NewStatus} = ProcessUpdated, Updates} = update_process(Process, Intent),
     ok = prg_worker_sidecar:lifecycle_sink(
         Pid, Deadline, NsOpts, lifecycle_event(TaskHeader, OldStatus, NewStatus), ProcessId
@@ -409,7 +444,12 @@ success_and_unlock(Intent, TaskHeader, Task, Deadline, State) ->
         {ok, []} ->
             ok = next_task(self()),
             State#prg_worker_state{process = undefined};
-        {ok, [ContinuationTask | _]} ->
+        {ok, [#{status := <<"waiting">>, task_id := NextTaskId, scheduled_time := Ts} | _]} ->
+            RunAfterMs = (Ts - Now) * 1000 - ?CAPTURE_DEFENSE_INTERVAL_MS,
+            ok = prg_scheduler:schedule_task(NsId, ProcessId, NextTaskId, RunAfterMs),
+            ok = next_task(self()),
+            State#prg_worker_state{process = undefined};
+        {ok, [#{status := <<"running">>} = ContinuationTask | _]} ->
             NewHistory = maps:get(history, Process) ++ Events,
             ok = continuation_task(self(), create_header(ContinuationTask), ContinuationTask),
             State#prg_worker_state{
@@ -475,7 +515,17 @@ error_and_retry({error, Reason} = Response, TaskHeader, Task, Deadline, State) -
                 );
             NewTask ->
                 Updates = #{process_id => ProcessId},
-                {ok, _} = prg_worker_sidecar:complete_and_continue(
+                %% prg_storage guarantees that when saving a task with the error status,
+                %% all deferred tasks of all types will be completed with the canceled status,
+                %% so calling complete_and_continue is guaranteed to return the retrieval task,
+                %% and not any other deferred task
+                {ok, [
+                    #{
+                        status := <<"waiting">>,
+                        task_id := NextTaskId,
+                        scheduled_time := Ts
+                    }
+                ]} = prg_worker_sidecar:complete_and_continue(
                     Pid,
                     Deadline,
                     StorageOpts,
@@ -484,7 +534,10 @@ error_and_retry({error, Reason} = Response, TaskHeader, Task, Deadline, State) -
                     Updates,
                     [],
                     NewTask
-                )
+                ),
+                Now = erlang:system_time(second),
+                RunAfterMs = (Ts - Now) * 1000 - ?CAPTURE_DEFENSE_INTERVAL_MS,
+                ok = prg_scheduler:schedule_task(NsId, ProcessId, NextTaskId, RunAfterMs)
         end,
     ok = next_task(self()),
     State#prg_worker_state{process = undefined}.
