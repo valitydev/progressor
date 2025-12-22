@@ -15,6 +15,7 @@
 %% Tests
 -export([simple_timers_test/1]).
 -export([simple_call_test/1]).
+-export([reschedule_after_call_test/1]).
 -export([simple_call_with_range_test/1]).
 -export([call_replace_timer_test/1]).
 -export([call_unset_timer_test/1]).
@@ -44,17 +45,41 @@ end_per_suite(_Config) ->
     ok.
 
 init_per_group(cache, C) ->
+    _ = prg_ct_hook:start_applications(),
+    _ = prg_ct_hook:create_kafka_topics(),
     [{ns_id, 'cached/namespace'}, {repl_timeout, 50} | C];
+init_per_group(tasks_injection, C) ->
+    PrgConfig = prg_ct_hook:app_env(progressor),
+    UpdPrgConfig = lists:foldl(
+        fun
+            ({defaults, Defaults}, Acc) -> [{defaults, Defaults#{task_scan_timeout => 1}} | Acc];
+            (Env, Acc) -> [Env | Acc]
+        end,
+        [],
+        PrgConfig
+    ),
+    Applications = [
+        {epg_connector, prg_ct_hook:app_env(epg_connector)},
+        {brod, prg_ct_hook:app_env(brod)},
+        {progressor, UpdPrgConfig}
+    ],
+    _ = prg_ct_hook:start_applications(Applications),
+    _ = prg_ct_hook:create_kafka_topics(),
+    C;
 init_per_group(_, C) ->
+    _ = prg_ct_hook:start_applications(),
+    _ = prg_ct_hook:create_kafka_topics(),
     C.
 
 end_per_group(_, _) ->
+    _ = prg_ct_hook:stop_applications(),
     ok.
 
 all() ->
     [
         {group, base}
-        %% while rasce condition hack using cache not applicable
+        %{group, tasks_injection}
+        %% while race condition hack using cache not applicable
         %{group, cache}
     ].
 
@@ -63,24 +88,28 @@ groups() ->
         {base, [], [
             simple_timers_test,
             simple_call_test,
+            reschedule_after_call_test,
             simple_call_with_range_test,
             call_replace_timer_test,
             call_unset_timer_test,
             postponed_call_test,
             postponed_call_to_suspended_process_test,
             multiple_calls_test,
-            simple_repair_after_non_retriable_error_test,
-            simple_repair_after_call_error_test,
             repair_after_non_retriable_error_test,
             error_after_max_retries_test,
             repair_after_call_error_test,
             remove_by_timer_test,
             remove_without_timer_test,
             put_process_test,
+            task_race_condition_hack_test
+        ]},
+        {tasks_injection, [], [
+            %% tasks performed only by scanning
+            simple_repair_after_non_retriable_error_test,
+            simple_repair_after_call_error_test,
             put_process_zombie_test,
             put_process_with_timeout_test,
-            put_process_with_remove_test,
-            task_race_condition_hack_test
+            put_process_with_remove_test
         ]},
         {cache, [], [
             {group, base}
@@ -130,6 +159,45 @@ simple_call_test(C) ->
     %% 2. call ->    [event2], undefined (duration 3s)
     %% 3. timeout -> [event3], undefined
     _ = mock_processor(simple_call_test),
+    Id = gen_id(),
+    {ok, ok} = progressor:init(#{ns => ?NS(C), id => Id, args => <<"init_args">>}),
+    {ok, <<"response">>} = progressor:call(#{ns => ?NS(C), id => Id, args => <<"call_args">>}),
+    3 = expect_steps_counter(3),
+    timer:sleep(?AWAIT_TIMEOUT(C)),
+    {ok, #{
+        process_id := Id,
+        status := <<"running">>,
+        history := [
+            #{
+                event_id := 1,
+                metadata := #{<<"format_version">> := 1},
+                payload := _Pl1,
+                timestamp := _Ts1
+            },
+            #{
+                event_id := 2,
+                metadata := #{<<"format_version">> := 1},
+                payload := _Pl2,
+                timestamp := _Ts2
+            },
+            #{
+                event_id := 3,
+                metadata := #{<<"format_version">> := 1},
+                payload := _Pl3,
+                timestamp := _Ts3
+            }
+        ]
+    }} = progressor:get(#{ns => ?NS(C), id => Id}),
+    unmock_processor(),
+    ok.
+%%
+-spec reschedule_after_call_test(_) -> _.
+reschedule_after_call_test(C) ->
+    %% steps:
+    %% 1. init ->    [event1], timer 2s
+    %% 2. call ->    [event2], undefined (duration 500 ms)
+    %% 3. timeout -> [event3], undefined
+    _ = mock_processor(reschedule_after_call_test),
     Id = gen_id(),
     {ok, ok} = progressor:init(#{ns => ?NS(C), id => Id, args => <<"init_args">>}),
     {ok, <<"response">>} = progressor:call(#{ns => ?NS(C), id => Id, args => <<"call_args">>}),
@@ -569,9 +637,9 @@ repair_after_non_retriable_error_test(C) ->
 error_after_max_retries_test(C) ->
     %% steps:
     %% 1. init ->    [],       timer 0s
-    %% 2. timeout -> {error, retry_this}
-    %% 3. timeout -> {error, retry_this}
-    %% 4. timeout -> {error, retry_this}
+    %% 2. timeout -> woody_retryable_error
+    %% 3. timeout -> woody_retryable_error
+    %% 4. timeout -> woody_retryable_error
     _ = mock_processor(error_after_max_retries_test),
     Id = gen_id(),
     {ok, ok} = progressor:init(#{ns => ?NS(C), id => Id, args => <<"init_args">>}),
@@ -875,7 +943,8 @@ task_race_condition_hack_test(C) ->
     _ = mock_processor(task_race_condition_hack_test),
     Id = gen_id(),
     erlang:spawn(fun() -> progressor:init(#{ns => ?NS(C), id => Id, args => <<"init_args">>}) end),
-    timer:sleep(100),
+    1 = expect_steps_counter(1),
+    timer:sleep(?AWAIT_TIMEOUT(C)),
     {ok, #{
         status := <<"running">>,
         range := #{},
@@ -944,6 +1013,36 @@ mock_processor(simple_call_test = TestCase) ->
             {ok, Result};
         ({timeout, <<>>, #{history := History} = _Process}, _Opts, _Ctx) ->
             %% timeout after call processing
+            ?assertEqual(2, erlang:length(History)),
+            Result = #{
+                events => [event(3)]
+            },
+            Self ! 3,
+            {ok, Result}
+    end,
+    mock_processor(TestCase, MockProcessor);
+%%
+mock_processor(reschedule_after_call_test = TestCase) ->
+    Self = self(),
+    MockProcessor = fun
+        ({init, <<"init_args">>, _Process}, _Opts, _Ctx) ->
+            Result = #{
+                events => [event(1)],
+                action => #{set_timer => erlang:system_time(second) + 2}
+            },
+            Self ! 1,
+            {ok, Result};
+        ({call, <<"call_args">>, _Process}, _Opts, _Ctx) ->
+            %% call when process scheduled (wait timeout)
+            timer:sleep(500),
+            Result = #{
+                response => <<"response">>,
+                events => [event(2)]
+            },
+            Self ! 2,
+            {ok, Result};
+        ({timeout, <<>>, #{history := History} = _Process}, _Opts, _Ctx) ->
+            %% timeout after call processing (without scanner, performed by internal timer)
             ?assertEqual(2, erlang:length(History)),
             Result = #{
                 events => [event(3)]

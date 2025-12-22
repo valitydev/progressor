@@ -21,6 +21,9 @@
 -export([capture_worker/2]).
 -export([return_worker/3]).
 -export([release_worker/3]).
+-export([schedule_task/4]).
+
+%% Deprecated
 -export([continuation_task/3]).
 
 -record(prg_scheduler_state, {ns_id, ns_opts, ready, free_workers, owners, wrk_monitors}).
@@ -39,6 +42,7 @@ pop_task(NsId, Worker) ->
     RegName = prg_utils:registered_name(NsId, "_scheduler"),
     gen_server:call(RegName, {pop_task, Worker}, infinity).
 
+%% Deprecated
 -spec continuation_task(namespace_id(), pid(), task()) -> {task_header(), task()} | ok.
 continuation_task(NsId, Worker, Task) ->
     RegName = prg_utils:registered_name(NsId, "_scheduler"),
@@ -54,15 +58,22 @@ capture_worker(NsId, Owner) ->
     RegName = prg_utils:registered_name(NsId, "_scheduler"),
     gen_server:call(RegName, {capture_worker, Owner}, infinity).
 
+%% worker is alive and free
 -spec return_worker(namespace_id(), pid(), pid()) -> ok.
 return_worker(NsId, Owner, Worker) ->
     RegName = prg_utils:registered_name(NsId, "_scheduler"),
     gen_server:cast(RegName, {return_worker, Owner, Worker}).
 
+%% worker is alive and busy (processes task)
 -spec release_worker(namespace_id(), pid(), pid()) -> ok.
 release_worker(NsId, Owner, Pid) ->
     RegName = prg_utils:registered_name(NsId, "_scheduler"),
     gen_server:cast(RegName, {release_worker, Owner, Pid}).
+
+-spec schedule_task(namespace_id(), id(), task_id(), timeout_ms()) -> ok.
+schedule_task(NsId, ProcessId, TaskId, Timeout) ->
+    RegName = prg_utils:registered_name(NsId, "_scheduler"),
+    gen_server:cast(RegName, {schedule_task, ProcessId, TaskId, Timeout}).
 
 %%%===================================================================
 %%% Spawning and gen_server implementation
@@ -156,6 +167,12 @@ handle_cast(
                 State#prg_scheduler_state{owners = maps:without([Owner], Owners)}
         end,
     {noreply, NewState};
+handle_cast(
+    {schedule_task, ProcessId, TaskId, Timeout},
+    #prg_scheduler_state{} = State
+) ->
+    _TRef = erlang:start_timer(Timeout, self(), {process_scheduled_task, ProcessId, TaskId}),
+    {noreply, State};
 handle_cast(_Request, #prg_scheduler_state{} = State) ->
     {noreply, State}.
 
@@ -173,6 +190,19 @@ handle_info(
     MRef = erlang:monitor(process, NewWrk),
     NewWrkMonitors = maps:put(NewWrk, MRef, maps:without([Pid], WrkMonitors)),
     {noreply, State#prg_scheduler_state{wrk_monitors = NewWrkMonitors}};
+handle_info(
+    {timeout, _TRef, {process_scheduled_task, ProcessId, TaskId}},
+    #prg_scheduler_state{free_workers = FreeWorkers} = State
+) ->
+    NewState =
+        case queue:out(FreeWorkers) of
+            {{value, Worker}, NewWorkers} ->
+                ok = prg_worker:process_scheduled_task(Worker, ProcessId, TaskId),
+                State#prg_scheduler_state{free_workers = NewWorkers};
+            {empty, _} ->
+                State
+        end,
+    {noreply, NewState};
 handle_info(_Info, #prg_scheduler_state{} = State) ->
     {noreply, State}.
 

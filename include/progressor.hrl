@@ -88,6 +88,7 @@
     worker_pool_size => pos_integer(),
     process_step_timeout => timeout_sec(),
     task_scan_timeout => timeout_sec(),
+    call_scan_timeout => timeout_sec(),
     last_timer_repair => boolean()
 }.
 
@@ -196,11 +197,14 @@
 -type timestamp_ms() :: non_neg_integer().
 -type timestamp_sec() :: non_neg_integer().
 -type timeout_sec() :: non_neg_integer().
+-type timeout_ms() :: non_neg_integer().
 
 %%%
 %%% Constants
 %%%
 -define(DEFAULT_STEP_TIMEOUT_SEC, 60).
+
+-define(DEFAULT_CALL_SCAN_TIMEOUT_SEC, 3).
 
 -define(DEFAULT_RETRY_POLICY, #{
     %% second

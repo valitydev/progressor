@@ -3,6 +3,13 @@
 %% API
 -export([init/2, terminate/1, pre_init_per_suite/3]).
 
+%% helpers
+-export([start_applications/0]).
+-export([start_applications/1]).
+-export([stop_applications/0]).
+-export([app_env/1]).
+-export([create_kafka_topics/0]).
+
 -define(LIFECYCLE_TOPIC, <<"default_lifecycle_topic">>).
 -define(EVENTSINK_TOPIC, <<"default_topic">>).
 -define(BROKERS, [{"kafka1", 9092}, {"kafka2", 9092}, {"kafka3", 9092}]).
@@ -17,24 +24,36 @@ pre_init_per_suite(_SuiteName, Config, State) ->
 
 terminate(_State) -> ok.
 
-%% Internal functions
+%%
+
+stop_applications() ->
+    lists:foreach(
+        fun({App, _}) ->
+            _ = application:stop(App),
+            _ = application:unload(App)
+        end,
+        lists:reverse(app_list())
+    ).
 
 start_applications() ->
+    start_applications(app_list()).
+
+start_applications(Applications) ->
     lists:foreach(
-        fun(App) ->
+        fun({App, Envs}) ->
             _ = application:load(App),
-            lists:foreach(fun({K, V}) -> ok = application:set_env(App, K, V) end, app_env(App)),
+            lists:foreach(fun({K, V}) -> ok = application:set_env(App, K, V) end, Envs),
             {ok, _} = application:ensure_all_started(App)
         end,
-        app_list()
+        Applications
     ).
 
 app_list() ->
     %% in order of launch
     [
-        epg_connector,
-        brod,
-        progressor
+        {epg_connector, app_env(epg_connector)},
+        {brod, app_env(brod)},
+        {progressor, app_env(progressor)}
     ].
 
 app_env(progressor) ->
@@ -62,7 +81,8 @@ app_env(progressor) ->
                 ]
             },
             %% seconds
-            task_scan_timeout => 1,
+            task_scan_timeout => 30,
+            call_scan_timeout => 1,
             worker_pool_size => 10,
             %% seconds
             process_step_timeout => 10

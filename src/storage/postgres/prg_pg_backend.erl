@@ -28,6 +28,7 @@
 -export([complete_and_unlock/5]).
 -export([complete_and_error/4]).
 -export([remove_process/3]).
+-export([capture_task/3]).
 
 %% shared functions
 -export([get_task/4]).
@@ -359,6 +360,44 @@ search_timers(PgOpts, NsId, _Timeout, Limit) ->
         ),
     to_maps(Columns, Rows, fun marshal_task/1).
 
+-spec capture_task(pg_opts(), namespace_id(), task_id()) -> [task()].
+capture_task(PgOpts, NsId, TaskId) ->
+    Pool = get_pool(internal, PgOpts),
+    #{
+        schedule := ScheduleTable,
+        running := RunningTable
+    } = prg_pg_utils:tables(NsId),
+    NowSec = erlang:system_time(second),
+    NowText = unixtime_to_text(NowSec),
+    {ok, Columns, Rows} =
+        _Res = epg_pool:transaction(
+            Pool,
+            fun(Connection) ->
+                epg_pool:query(
+                    Connection,
+                    "WITH current_task AS (SELECT * FROM " ++ ScheduleTable ++
+                        " WHERE task_id = $2 FOR UPDATE), "
+                        "deleted_from_schedule AS ("
+                        "  DELETE FROM " ++ ScheduleTable ++
+                        " WHERE task_id = $2 AND status = 'waiting' "
+                        "    RETURNING"
+                        "      task_id, process_id, task_type, 'running'::task_status as status, scheduled_time, "
+                        "      TO_TIMESTAMP($1, 'YYYY-MM-DD HH24:MI:SS') as running_time, args, metadata, "
+                        "      last_retry_interval, attempts_count, context"
+                        "), "
+                        "inserted_to_running AS ("
+                        "  INSERT INTO " ++ RunningTable ++
+                        "    (task_id, process_id, task_type, status, scheduled_time, running_time,"
+                        "       args, metadata, last_retry_interval, attempts_count, context) "
+                        "     SELECT * FROM deleted_from_schedule RETURNING * "
+                        ") "
+                        "SELECT * FROM current_task c FULL OUTER JOIN inserted_to_running i ON c.task_id = i.task_id",
+                    [NowText, TaskId]
+                )
+            end
+        ),
+    to_maps(Columns, Rows, fun marshal_task/1).
+
 -spec search_calls(pg_opts(), namespace_id(), pos_integer()) -> [task()].
 search_calls(PgOpts, NsId, Limit) ->
     Pool = get_pool(scan, PgOpts),
@@ -508,7 +547,7 @@ complete_and_continue(PgOpts, NsId, TaskResult, ProcessUpdates, Events, NextTask
     % update completed task and process,
     % cancel blocked and waiting timers,
     % save new timer,
-    % return continuation call if exists
+    % return continuation call if exists otherwise current task
     Pool = get_pool(internal, PgOpts),
     #{
         processes := ProcessesTable,
@@ -548,12 +587,12 @@ complete_and_continue(PgOpts, NsId, TaskResult, ProcessUpdates, Events, NextTask
                                 " * "
                             );
                         #{status := <<"waiting">>} ->
-                            {ok, _, _, [{NextTaskId}]} = do_save_schedule(
+                            do_save_schedule(
                                 Connection,
                                 ScheduleTable,
-                                NextTask#{task_id => NextTaskId}
-                            ),
-                            {ok, 0, [], []}
+                                NextTask#{task_id => NextTaskId},
+                                " * "
+                            )
                     end;
                 {ok, _, Col, Row} ->
                     %% continuation call exists, return it
@@ -572,6 +611,7 @@ complete_and_continue(PgOpts, NsId, TaskResult, ProcessUpdates, Events, NextTask
     {ok, [task()]}.
 complete_and_suspend(PgOpts, NsId, TaskResult, ProcessUpdates, Events) ->
     % update completed task and process, cancel blocked and waiting timers
+    % Only task timers (timeout/remove) are cancelled, task calls must be processed!!!
     Pool = get_pool(internal, PgOpts),
     #{
         processes := ProcessesTable,
@@ -639,7 +679,7 @@ complete_and_unlock(PgOpts, NsId, TaskResult, ProcessUpdates, Events) ->
     } = prg_pg_utils:tables(NsId),
     #{task_id := TaskId} = TaskResult,
     #{process_id := ProcessId} = ProcessUpdates,
-    {ok, _, Columns, Rows} = epg_pool:transaction(
+    {ok, Columns, Rows} = epg_pool:transaction(
         Pool,
         fun(Connection) ->
             {ok, _} = do_update_process(Connection, ProcessesTable, ProcessUpdates),
@@ -656,15 +696,13 @@ complete_and_unlock(PgOpts, NsId, TaskResult, ProcessUpdates, Events) ->
                 RunningTable,
                 TaskResult#{process_id => ProcessId}
             ),
-            _ =
-                case Completion of
-                    {ok, _, _, []} ->
-                        {ok, _} = do_unlock_timer(Connection, ScheduleTable, ProcessId);
-                    {ok, _, _Col, _Row} ->
-                        %% if postponed call exists then timer remain blocked
-                        do_nothing
-                end,
-            Completion
+            case Completion of
+                {ok, _, _, []} ->
+                    do_unlock_timer(Connection, ScheduleTable, RunningTable, ProcessId);
+                {ok, _, Col, Row} ->
+                    %% if postponed call exists then timer remain blocked
+                    {ok, Col, Row}
+            end
         end
     ),
     {ok, to_maps(Columns, Rows, fun marshal_task/1)}.
@@ -1053,13 +1091,32 @@ do_block_timer(Connection, ScheduleTable, ProcessId) ->
         [{TaskId}] -> {ok, TaskId}
     end.
 
-do_unlock_timer(Connection, ScheduleTable, ProcessId) ->
+do_unlock_timer(Connection, ScheduleTable, RunningTable, ProcessId) ->
+    NowSec = erlang:system_time(second),
+    Now = unixtime_to_datetime(NowSec),
+    NowText = unixtime_to_text(NowSec),
     epg_pool:query(
         Connection,
-        "UPDATE " ++ ScheduleTable ++
+        "WITH unblocked_task AS (UPDATE" ++ ScheduleTable ++
             " SET status = 'waiting' "
-            "WHERE process_id = $1 AND status = 'blocked'",
-        [ProcessId]
+            "  WHERE process_id = $1 AND status = 'blocked' AND scheduled_time > $2 RETURNING * "
+            "), "
+            "delayed_task AS ("
+            "  DELETE FROM " ++ ScheduleTable ++
+            "  WHERE process_id = $1 AND status = 'blocked' AND scheduled_time <= $2"
+            "    RETURNING"
+            "      task_id, process_id, task_type, 'running'::task_status as status, scheduled_time, "
+            "      TO_TIMESTAMP($3, 'YYYY-MM-DD HH24:MI:SS') as running_time, args, metadata, "
+            "      last_retry_interval, attempts_count, context"
+            "), "
+            "running_task AS ("
+            "  INSERT INTO " ++ RunningTable ++
+            "    (task_id, process_id, task_type, status, scheduled_time, running_time,"
+            "       args, metadata, last_retry_interval, attempts_count, context) "
+            "     SELECT * FROM delayed_task RETURNING * "
+            ") "
+            "SELECT * FROM unblocked_task ut FULL OUTER JOIN running_task rt ON ut.task_id = rt.task_id",
+        [ProcessId, Now, NowText]
     ).
 
 do_cancel_timer(Connection, TaskTable, ScheduleTable, ProcessId) ->
