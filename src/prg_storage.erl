@@ -25,6 +25,7 @@
 -export([complete_and_unlock/5]).
 -export([complete_and_error/4]).
 -export([remove_process/3]).
+-export([capture_task/3]).
 
 %% shared functions
 -export([get_task/3]).
@@ -146,6 +147,10 @@ complete_and_unlock(
 -spec remove_process(storage_opts(), namespace_id(), id()) -> ok | no_return().
 remove_process(#{client := Handler, options := HandlerOpts}, NsId, ProcessId) ->
     Handler:remove_process(HandlerOpts, NsId, ProcessId).
+
+-spec capture_task(storage_opts(), namespace_id(), task_id()) -> [task()].
+capture_task(#{client := Handler, options := HandlerOpts}, NsId, TaskId) ->
+    Handler:capture_task(HandlerOpts, NsId, TaskId).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% Shared functions (recipient required)

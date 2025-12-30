@@ -30,9 +30,15 @@ start_link({NsId, _NsOpts} = NS) ->
     gen_server:start_link({local, RegName}, ?MODULE, NS, []).
 
 init(
-    {NsId, #{task_scan_timeout := RescanTimeoutSec, process_step_timeout := StepTimeoutSec} = Opts}
+    {NsId,
+        #{
+            task_scan_timeout := RescanTimeoutSec,
+            call_scan_timeout := CallRescanTimeoutSec,
+            process_step_timeout := StepTimeoutSec
+        } = Opts}
 ) ->
     RescanTimeoutMs = RescanTimeoutSec * 1000,
+    CallRescanTimeoutMs = CallRescanTimeoutSec * 1000,
     StepTimeoutMs = StepTimeoutSec * 1000,
     State = #prg_scanner_state{
         ns_id = NsId,
@@ -44,7 +50,7 @@ init(
         case maps:get(worker_pool_size, Opts) > 0 of
             true ->
                 _ = start_rescan_timers(RescanTimeoutMs),
-                _ = start_rescan_calls((RescanTimeoutMs div 3) + 100),
+                _ = start_rescan_calls(CallRescanTimeoutMs),
                 _ = start_zombie_collector(StepTimeoutMs);
             false ->
                 skip_scanning
