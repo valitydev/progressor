@@ -644,7 +644,8 @@ check_retryable(TaskHeader, #{last_retry_interval := LastInterval} = Task, Retry
                     args,
                     last_retry_interval,
                     attempts_count,
-                    metadata
+                    metadata,
+                    context
                 ],
                 Task#{
                     status => <<"waiting">>,
