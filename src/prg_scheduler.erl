@@ -233,7 +233,7 @@ do_push_task(TaskHeader, Task, State) ->
     FreeWorkers = State#prg_scheduler_state.free_workers,
     case queue:out(FreeWorkers) of
         {{value, Worker}, NewQueue} ->
-            ok = prg_worker:process_task(Worker, TaskHeader, Task),
+            ok = prg_worker:process_task(Worker, TaskHeader, Task, otel_ctx:get_current()),
             State#prg_scheduler_state{
                 free_workers = NewQueue
             };

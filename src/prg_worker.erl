@@ -15,7 +15,7 @@
 ]).
 -export([handle_continue/2]).
 
--export([process_task/3]).
+-export([process_task/4]).
 -export([continuation_task/3]).
 -export([next_task/1]).
 -export([process_scheduled_task/3]).
@@ -29,9 +29,9 @@
 %%% API
 %%%
 
--spec process_task(pid(), task_header(), task()) -> ok.
-process_task(Worker, TaskHeader, #{process_id := _ProcessId, task_id := _TaskId} = Task) ->
-    gen_server:cast(Worker, {process_task, TaskHeader, Task}).
+-spec process_task(pid(), task_header(), task(), otel_ctx:t()) -> ok.
+process_task(Worker, TaskHeader, #{process_id := _ProcessId, task_id := _TaskId} = Task, OtelCtx) ->
+    gen_server:cast(Worker, {process_task, TaskHeader, Task, OtelCtx}).
 
 -spec continuation_task(pid(), task_header(), task()) -> ok.
 continuation_task(Worker, TaskHeader, Task) ->
@@ -64,7 +64,7 @@ handle_continue(do_start, #prg_worker_state{ns_id = NsId} = State) ->
     {ok, Pid} = prg_worker_sidecar:start_link(),
     case prg_scheduler:pop_task(NsId, self()) of
         {TaskHeader, Task} ->
-            ok = process_task(self(), TaskHeader, Task);
+            ok = process_task(self(), TaskHeader, Task, otel_ctx:get_current());
         not_found ->
             skip
     end,
@@ -74,19 +74,23 @@ handle_call(_Request, _From, #prg_worker_state{} = State) ->
     {reply, ok, State}.
 
 handle_cast(
-    {process_task, TaskHeader, Task},
+    {process_task, TaskHeader, Task, OtelCtx},
     #prg_worker_state{
         ns_id = NsId,
         ns_opts = #{storage := StorageOpts, process_step_timeout := TimeoutSec} = _NsOpts,
         sidecar_pid = Pid
     } = State
 ) ->
-    Deadline = erlang:system_time(millisecond) + TimeoutSec * 1000,
-    ProcessId = maps:get(process_id, Task),
-    HistoryRange = maps:get(range, maps:get(metadata, Task, #{}), #{}),
-    {ok, Process} = prg_worker_sidecar:get_process(Pid, Deadline, StorageOpts, NsId, ProcessId, HistoryRange),
-    NewState = do_process_task(TaskHeader, Task, Deadline, State#prg_worker_state{process = Process}),
-    {noreply, NewState};
+    otel_tracer:with_span(
+        OtelCtx, opentelemetry:get_application_tracer(?MODULE), <<"process">>, #{kind => internal}, fun(SpanCtx) ->
+            Deadline = erlang:system_time(millisecond) + TimeoutSec * 1000,
+            ProcessId = maps:get(process_id, Task),
+            HistoryRange = maps:get(range, maps:get(metadata, Task, #{}), #{}),
+            {ok, Process} = prg_worker_sidecar:get_process(Pid, Deadline, StorageOpts, NsId, ProcessId, HistoryRange),
+            NewState = do_process_task(TaskHeader, Task, Deadline, State#prg_worker_state{process = Process}),
+            {noreply, NewState}
+        end
+    );
 handle_cast(
     {continuation_task, TaskHeader, Task},
     #prg_worker_state{

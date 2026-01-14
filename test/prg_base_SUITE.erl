@@ -8,6 +8,8 @@
     end_per_suite/1,
     init_per_group/2,
     end_per_group/2,
+    init_per_testcase/2,
+    end_per_testcase/2,
     all/0,
     groups/0
 ]).
@@ -61,7 +63,9 @@ init_per_group(tasks_injection, C) ->
     Applications = [
         {epg_connector, prg_ct_hook:app_env(epg_connector)},
         {brod, prg_ct_hook:app_env(brod)},
-        {progressor, UpdPrgConfig}
+        {progressor, UpdPrgConfig},
+        {opentelemetry_exporter, []},
+        {opentelemetry, []}
     ],
     _ = prg_ct_hook:start_applications(Applications),
     _ = prg_ct_hook:create_kafka_topics(),
@@ -74,6 +78,23 @@ init_per_group(_, C) ->
 end_per_group(_, _) ->
     _ = prg_ct_hook:stop_applications(),
     ok.
+
+init_per_testcase(Name, C) ->
+    Mod = ?MODULE,
+    SpanName = iolist_to_binary([atom_to_binary(Mod), ":", atom_to_binary(Name), "/1"]),
+    SpanCtx = otel_tracer:start_span(opentelemetry:get_application_tracer(Mod), SpanName, #{kind => internal}),
+    %% NOTE This also puts otel context to process dictionary
+    _ = otel_tracer:set_current_span(SpanCtx),
+    [{span_ctx, SpanCtx} | C].
+
+end_per_testcase(_Name, C) ->
+    case lists:keyfind(span_ctx, 1, C) of
+        {span_ctx, SpanCtx} ->
+            _ = otel_span:end_span(SpanCtx),
+            ok;
+        _ ->
+            ok
+    end.
 
 all() ->
     [

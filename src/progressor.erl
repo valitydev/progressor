@@ -29,6 +29,7 @@
     id := id(),
     args => term(),
     idempotency_key => binary(),
+    otel_ctx => otel_ctx:t(),
     context => binary(),
     range => history_range(),
     options => map(),
@@ -45,6 +46,7 @@ reply(Pid, Msg) ->
 init(Req) ->
     prg_utils:pipe(
         [
+            fun maybe_add_otel_ctx/1,
             fun add_ns_opts/1,
             fun check_idempotency/1,
             fun add_task/1,
@@ -58,6 +60,7 @@ init(Req) ->
 call(Req) ->
     prg_utils:pipe(
         [
+            fun maybe_add_otel_ctx/1,
             fun add_ns_opts/1,
             fun check_idempotency/1,
             fun(Data) -> check_process_status(Data, <<"running">>) end,
@@ -86,6 +89,7 @@ repair(Req) ->
 simple_repair(Req) ->
     prg_utils:pipe(
         [
+            fun maybe_add_otel_ctx/1,
             fun add_ns_opts/1,
             fun check_idempotency/1,
             fun check_process_continuation/1,
@@ -99,6 +103,7 @@ simple_repair(Req) ->
 get(Req) ->
     prg_utils:pipe(
         [
+            fun maybe_add_otel_ctx/1,
             fun add_ns_opts/1,
             fun do_get/1
         ],
@@ -109,16 +114,18 @@ get(Req) ->
 put(Req) ->
     prg_utils:pipe(
         [
+            fun maybe_add_otel_ctx/1,
             fun add_ns_opts/1,
             fun do_put/1
         ],
         Req
     ).
 
--spec trace(request()) -> {ok, _Result} | {error, _Reason}.
+-spec trace(request()) -> {ok, _Result :: term()} | {error, _Reason :: term()}.
 trace(Req) ->
     prg_utils:pipe(
         [
+            fun maybe_add_otel_ctx/1,
             fun add_ns_opts/1,
             fun do_trace/1
         ],
@@ -164,6 +171,11 @@ cleanup_storage(#{ns := NsId, ns_opts := #{storage := StorageOpts}}) ->
 %-endif.
 
 %% Internal functions
+
+maybe_add_otel_ctx(#{otel_ctx := _} = Opts) ->
+    Opts;
+maybe_add_otel_ctx(Opts) ->
+    Opts#{otel_ctx => otel_ctx:get_current()}.
 
 add_ns_opts(#{ns := NsId} = Opts) ->
     NSs = application:get_env(progressor, namespaces, #{}),
@@ -371,20 +383,27 @@ do_health_check(#{ns := NsId, ns_opts := #{storage := StorageOpts}}) ->
             {critical, #{progressor_namespace => NsId, error => Detail}}
     end.
 
-process_call(#{ns_opts := NsOpts, ns := NsId, type := Type, task := Task, worker := Worker}) ->
-    TimeoutSec = maps:get(process_step_timeout, NsOpts, ?DEFAULT_STEP_TIMEOUT_SEC),
-    Timeout = TimeoutSec * 1000,
-    Ref = make_ref(),
-    TaskHeader = make_task_header(Type, Ref),
-    ok = prg_worker:process_task(Worker, TaskHeader, Task),
-    ok = prg_scheduler:release_worker(NsId, self(), Worker),
-    %% see fun reply/2
-    receive
-        {Ref, Result} ->
-            Result
-    after Timeout ->
-        {error, <<"timeout">>}
-    end.
+process_call(#{ns_opts := NsOpts, ns := NsId, type := Type, task := Task, worker := Worker, otel_ctx := OtelCtx}) ->
+    otel_tracer:with_span(
+        OtelCtx, opentelemetry:get_application_tracer(?MODULE), <<"call">>, #{kind => internal}, fun(SpanCtx) ->
+            TimeoutSec = maps:get(process_step_timeout, NsOpts, ?DEFAULT_STEP_TIMEOUT_SEC),
+            Timeout = TimeoutSec * 1000,
+            Ref = make_ref(),
+            TaskHeader = make_task_header(Type, Ref),
+            ok = prg_worker:process_task(Worker, TaskHeader, Task, otel_ctx:get_current()),
+            ok = prg_scheduler:release_worker(NsId, self(), Worker),
+            %% TODO Maybe refactor to span inside scheduler gen_server
+            _ = otel_span:add_event(SpanCtx, <<"release worker">>, #{}),
+            %% see fun reply/2
+            receive
+                {Ref, Result} ->
+                    Result
+            after Timeout ->
+                _ = otel_span:record_exception(SpanCtx, throw, <<"timeout">>, [], #{}),
+                {error, <<"timeout">>}
+            end
+        end
+    ).
 
 make_task_header(init, Ref) ->
     {init, {self(), Ref}};
