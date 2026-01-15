@@ -75,6 +75,7 @@ call(Req) ->
 repair(Req) ->
     prg_utils:pipe(
         [
+            fun maybe_add_otel_ctx/1,
             fun add_ns_opts/1,
             fun check_idempotency/1,
             fun(Data) -> check_process_status(Data, <<"error">>) end,
@@ -238,10 +239,18 @@ check_process_continuation(
 do_simple_repair(#{task := _}) ->
     %% process will repaired via timeout task
     {ok, ok};
-do_simple_repair(#{ns_opts := #{storage := StorageOpts} = NsOpts, id := Id, ns := NsId}) ->
-    ok = prg_storage:repair_process(StorageOpts, NsId, Id),
-    ok = prg_notifier:lifecycle_sink(NsOpts, repair, Id),
-    {ok, ok}.
+do_simple_repair(#{ns_opts := #{storage := StorageOpts} = NsOpts, id := Id, ns := NsId, otel_ctx := OtelCtx}) ->
+    otel_tracer:with_span(
+        OtelCtx,
+        opentelemetry:get_application_tracer(?MODULE),
+        <<"simple repair">>,
+        #{kind => internal},
+        fun(_SpanCtx) ->
+            ok = prg_storage:repair_process(StorageOpts, NsId, Id),
+            ok = prg_notifier:lifecycle_sink(NsOpts, repair, Id),
+            {ok, ok}
+        end
+    ).
 
 prepare(
     Fun,
@@ -322,53 +331,80 @@ await_task_result(StorageOpts, NsId, KeyOrId, StepTimeout, Duration) ->
             )
     end.
 
-do_get(#{ns_opts := #{storage := StorageOpts}, id := Id, ns := NsId, range := HistoryRange} = Req) ->
-    case prg_storage:get_process_with_initialization(StorageOpts, NsId, Id, HistoryRange) of
-        {ok, #{initialization := _TaskId}} ->
-            %% init task not finished, await and retry
-            Timeout = application:get_env(progressor, task_repeat_request_timeout, ?TASK_REPEAT_REQUEST_TIMEOUT),
-            timer:sleep(Timeout),
-            do_get(Req);
-        Result ->
-            Result
-    end;
+do_get(
+    #{
+        ns_opts := #{storage := StorageOpts},
+        id := Id,
+        ns := NsId,
+        range := HistoryRange,
+        otel_ctx := OtelCtx
+    } = Req
+) ->
+    otel_tracer:with_span(
+        OtelCtx,
+        opentelemetry:get_application_tracer(?MODULE),
+        <<"get">>,
+        #{kind => internal},
+        fun(_SpanCtx) ->
+            case prg_storage:get_process_with_initialization(StorageOpts, NsId, Id, HistoryRange) of
+                {ok, #{initialization := _TaskId}} ->
+                    %% init task not finished, await and retry
+                    Timeout = application:get_env(
+                        progressor, task_repeat_request_timeout, ?TASK_REPEAT_REQUEST_TIMEOUT
+                    ),
+                    timer:sleep(Timeout),
+                    do_get(Req);
+                Result ->
+                    Result
+            end
+        end
+    );
 do_get(Req) ->
     do_get(Req#{range => #{}}).
 
-do_trace(#{ns_opts := #{storage := StorageOpts}, id := Id, ns := NsId}) ->
-    prg_storage:process_trace(StorageOpts, NsId, Id).
+do_trace(#{ns_opts := #{storage := StorageOpts}, id := Id, ns := NsId, otel_ctx := OtelCtx}) ->
+    otel_tracer:with_span(
+        OtelCtx, opentelemetry:get_application_tracer(?MODULE), <<"trace">>, #{kind => internal}, fun(_SpanCtx) ->
+            prg_storage:process_trace(StorageOpts, NsId, Id)
+        end
+    ).
 
 do_put(
     #{
         ns_opts := #{storage := StorageOpts},
         id := Id,
         ns := NsId,
-        args := #{process := Process} = Args
+        args := #{process := Process} = Args,
+        otel_ctx := OtelCtx
     } = Opts
 ) ->
-    #{
-        process_id := ProcessId
-    } = Process,
-    Action = maps:get(action, Args, undefined),
-    Context = maps:get(context, Opts, <<>>),
-    Now = erlang:system_time(second),
-    InitTask = #{
-        process_id => ProcessId,
-        task_type => <<"init">>,
-        status => <<"finished">>,
-        args => <<>>,
-        context => Context,
-        response => term_to_binary({ok, ok}),
-        scheduled_time => Now,
-        running_time => Now,
-        finished_time => Now,
-        last_retry_interval => 0,
-        attempts_count => 0
-    },
-    ActiveTask = action_to_task(Action, ProcessId, Context),
-    ProcessData0 = #{process => Process, init_task => InitTask},
-    ProcessData = maybe_add_key(ActiveTask, active_task, ProcessData0),
-    prg_storage:put_process_data(StorageOpts, NsId, Id, ProcessData).
+    otel_tracer:with_span(
+        OtelCtx, opentelemetry:get_application_tracer(?MODULE), <<"put">>, #{kind => internal}, fun(_SpanCtx) ->
+            #{
+                process_id := ProcessId
+            } = Process,
+            Action = maps:get(action, Args, undefined),
+            Context = maps:get(context, Opts, <<>>),
+            Now = erlang:system_time(second),
+            InitTask = #{
+                process_id => ProcessId,
+                task_type => <<"init">>,
+                status => <<"finished">>,
+                args => <<>>,
+                context => Context,
+                response => term_to_binary({ok, ok}),
+                scheduled_time => Now,
+                running_time => Now,
+                finished_time => Now,
+                last_retry_interval => 0,
+                attempts_count => 0
+            },
+            ActiveTask = action_to_task(Action, ProcessId, Context),
+            ProcessData0 = #{process => Process, init_task => InitTask},
+            ProcessData = maybe_add_key(ActiveTask, active_task, ProcessData0),
+            prg_storage:put_process_data(StorageOpts, NsId, Id, ProcessData)
+        end
+    ).
 
 do_health_check(#{ns := NsId, ns_opts := #{storage := StorageOpts}}) ->
     try prg_storage:health_check(StorageOpts) of
@@ -390,7 +426,7 @@ process_call(#{ns_opts := NsOpts, ns := NsId, type := Type, task := Task, worker
             Timeout = TimeoutSec * 1000,
             Ref = make_ref(),
             TaskHeader = make_task_header(Type, Ref),
-            ok = prg_worker:process_task(Worker, TaskHeader, Task, otel_ctx:get_current()),
+            ok = prg_worker:process_task(Worker, TaskHeader, Task),
             ok = prg_scheduler:release_worker(NsId, self(), Worker),
             %% TODO Maybe refactor to span inside scheduler gen_server
             _ = otel_span:add_event(SpanCtx, <<"release worker">>, #{}),
