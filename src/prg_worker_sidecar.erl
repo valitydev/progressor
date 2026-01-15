@@ -132,7 +132,7 @@ complete_and_error(Pid, _Deadline, StorageOpts, NsId, TaskResult, ProcessUpdates
             infinity
         )
     end,
-    prg_utils:with_observe(Fun, ?COMPLETION_KEY, [erlang:atom_to_list(NsId), "complete_and_unlock"]).
+    prg_utils:with_observe(Fun, ?COMPLETION_KEY, [erlang:atom_to_list(NsId), "complete_and_error"]).
 
 -spec remove_process(pid(), timestamp_ms(), storage_opts(), namespace_id(), id()) ->
     ok | no_return().
