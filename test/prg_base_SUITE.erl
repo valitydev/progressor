@@ -65,7 +65,7 @@ init_per_group(tasks_injection, C) ->
         {brod, prg_ct_hook:app_env(brod)},
         {progressor, UpdPrgConfig},
         {opentelemetry_exporter, []},
-        {opentelemetry, []}
+        {opentelemetry, [{span_processor, simple}]}
     ],
     _ = prg_ct_hook:start_applications(Applications),
     _ = prg_ct_hook:create_kafka_topics(),

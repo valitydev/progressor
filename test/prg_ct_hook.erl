@@ -55,7 +55,7 @@ app_list() ->
         {brod, app_env(brod)},
         {progressor, app_env(progressor)},
         {opentelemetry_exporter, []},
-        {opentelemetry, []}
+        {opentelemetry, [{span_processor, simple}]}
     ].
 
 app_env(progressor) ->

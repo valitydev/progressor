@@ -3,6 +3,7 @@
 -behaviour(gen_server).
 
 -include("progressor.hrl").
+-include("otel.hrl").
 
 -export([start_link/0]).
 -export([
@@ -51,7 +52,7 @@
 process(Pid, Deadline, #{namespace := NS} = NsOpts, {TaskType, _, _} = Request, Context) ->
     Timeout = Deadline - erlang:system_time(millisecond),
     Fun = fun() ->
-        gen_server:call(Pid, {process, NsOpts, Request, Context, otel_ctx:get_current()}, Timeout)
+        gen_server:call(Pid, {process, NsOpts, Request, Context, ?current_otel_ctx}, Timeout)
     end,
     prg_utils:with_observe(Fun, ?PROCESSING_KEY, [NS, erlang:atom_to_list(TaskType)]).
 
@@ -71,8 +72,7 @@ complete_and_continue(Pid, _Deadline, StorageOpts, NsId, TaskResult, ProcessUpda
     Fun = fun() ->
         gen_server:call(
             Pid,
-            {complete_and_continue, StorageOpts, NsId, TaskResult, ProcessUpdates, Events, Task,
-                otel_ctx:get_current()},
+            {complete_and_continue, StorageOpts, NsId, TaskResult, ProcessUpdates, Events, Task, ?current_otel_ctx},
             infinity
         )
     end,
@@ -94,7 +94,7 @@ complete_and_suspend(Pid, _Deadline, StorageOpts, NsId, TaskResult, ProcessUpdat
     Fun = fun() ->
         gen_server:call(
             Pid,
-            {complete_and_suspend, StorageOpts, NsId, TaskResult, ProcessUpdates, Events, otel_ctx:get_current()},
+            {complete_and_suspend, StorageOpts, NsId, TaskResult, ProcessUpdates, Events, ?current_otel_ctx},
             infinity
         )
     end,
@@ -114,7 +114,7 @@ complete_and_unlock(Pid, _Deadline, StorageOpts, NsId, TaskResult, ProcessUpdate
     Fun = fun() ->
         gen_server:call(
             Pid,
-            {complete_and_unlock, StorageOpts, NsId, TaskResult, ProcessUpdates, Events, otel_ctx:get_current()},
+            {complete_and_unlock, StorageOpts, NsId, TaskResult, ProcessUpdates, Events, ?current_otel_ctx},
             infinity
         )
     end,
@@ -129,7 +129,7 @@ complete_and_error(Pid, _Deadline, StorageOpts, NsId, TaskResult, ProcessUpdates
     Fun = fun() ->
         gen_server:call(
             Pid,
-            {complete_and_error, StorageOpts, NsId, TaskResult, ProcessUpdates, otel_ctx:get_current()},
+            {complete_and_error, StorageOpts, NsId, TaskResult, ProcessUpdates, ?current_otel_ctx},
             infinity
         )
     end,
@@ -140,7 +140,7 @@ complete_and_error(Pid, _Deadline, StorageOpts, NsId, TaskResult, ProcessUpdates
 remove_process(Pid, _Deadline, StorageOpts, NsId, ProcessId) ->
     %% Timeout = Deadline - erlang:system_time(millisecond),
     Fun = fun() ->
-        gen_server:call(Pid, {remove_process, StorageOpts, NsId, ProcessId, otel_ctx:get_current()}, infinity)
+        gen_server:call(Pid, {remove_process, StorageOpts, NsId, ProcessId, ?current_otel_ctx}, infinity)
     end,
     prg_utils:with_observe(Fun, ?REMOVING_KEY, [erlang:atom_to_list(NsId)]).
 
@@ -150,7 +150,7 @@ remove_process(Pid, _Deadline, StorageOpts, NsId, ProcessId) ->
 event_sink(Pid, Deadline, #{namespace := NS} = NsOpts, ProcessId, Events) ->
     Timeout = Deadline - erlang:system_time(millisecond),
     Fun = fun() ->
-        gen_server:call(Pid, {event_sink, NsOpts, ProcessId, Events, otel_ctx:get_current()}, Timeout)
+        gen_server:call(Pid, {event_sink, NsOpts, ProcessId, Events, ?current_otel_ctx}, Timeout)
     end,
     prg_utils:with_observe(Fun, ?NOTIFICATION_KEY, [NS, "event_sink"]).
 
@@ -159,7 +159,7 @@ event_sink(Pid, Deadline, #{namespace := NS} = NsOpts, ProcessId, Events) ->
 lifecycle_sink(Pid, Deadline, #{namespace := NS} = NsOpts, TaskType, ProcessId) ->
     Timeout = Deadline - erlang:system_time(millisecond),
     Fun = fun() ->
-        gen_server:call(Pid, {lifecycle_sink, NsOpts, TaskType, ProcessId, otel_ctx:get_current()}, Timeout)
+        gen_server:call(Pid, {lifecycle_sink, NsOpts, TaskType, ProcessId, ?current_otel_ctx}, Timeout)
     end,
     prg_utils:with_observe(Fun, ?NOTIFICATION_KEY, [NS, "lifecycle_sink"]).
 %%
@@ -168,19 +168,19 @@ lifecycle_sink(Pid, Deadline, #{namespace := NS} = NsOpts, TaskType, ProcessId) 
     {ok, process()} | {error, _Reason}.
 get_process(Pid, _Deadline, StorageOpts, NsId, ProcessId) ->
     %% Timeout = Deadline - erlang:system_time(millisecond),
-    gen_server:call(Pid, {get_process, StorageOpts, NsId, ProcessId, #{}, otel_ctx:get_current()}, infinity).
+    gen_server:call(Pid, {get_process, StorageOpts, NsId, ProcessId, #{}, ?current_otel_ctx}, infinity).
 
 -spec get_process(pid(), timestamp_ms(), storage_opts(), namespace_id(), id(), history_range()) ->
     {ok, process()} | {error, _Reason}.
 get_process(Pid, _Deadline, StorageOpts, NsId, ProcessId, HistoryRange) ->
     %% Timeout = Deadline - erlang:system_time(millisecond),
-    gen_server:call(Pid, {get_process, StorageOpts, NsId, ProcessId, HistoryRange, otel_ctx:get_current()}, infinity).
+    gen_server:call(Pid, {get_process, StorageOpts, NsId, ProcessId, HistoryRange, ?current_otel_ctx}, infinity).
 
 -spec get_task(pid(), timestamp_ms(), storage_opts(), namespace_id(), task_id()) ->
     {ok, task()} | {error, _Reason}.
 get_task(Pid, _Deadline, StorageOpts, NsId, TaskId) ->
     %% Timeout = Deadline - erlang:system_time(millisecond),
-    gen_server:call(Pid, {get_task, StorageOpts, NsId, TaskId, otel_ctx:get_current()}, infinity).
+    gen_server:call(Pid, {get_task, StorageOpts, NsId, TaskId, ?current_otel_ctx}, infinity).
 
 %%%===================================================================
 %%% Spawning and gen_server implementation
@@ -203,174 +203,120 @@ handle_call(
     _From,
     #prg_sidecar_state{} = State
 ) ->
-    otel_tracer:with_span(
-        OtelCtx, opentelemetry:get_application_tracer(?MODULE), <<"process">>, #{kind => internal}, fun(
-            _SpanCtx
-        ) ->
-            Response =
-                try Handler:process(Request, Options, Ctx) of
-                    {ok, _Result} = OK ->
-                        OK;
-                    {error, Reason} = ERR ->
-                        logger:error("processor error: ~p", [Reason]),
-                        ERR;
-                    Unsupported ->
-                        logger:error("processor unexpected result: ~p", [Unsupported]),
-                        {error, <<"unsupported_result">>}
-                catch
-                    Class:Term:Trace ->
-                        logger:error("processor exception: ~p", [[Class, Term, Trace]]),
-                        {error, {exception, Class, Term}}
-                end,
-            {reply, Response, State}
-        end
-    );
+    ?with_span(OtelCtx, <<"process">>, fun() ->
+        Response =
+            try Handler:process(Request, Options, Ctx) of
+                {ok, _Result} = OK ->
+                    OK;
+                {error, Reason} = ERR ->
+                    logger:error("processor error: ~p", [Reason]),
+                    ERR;
+                Unsupported ->
+                    logger:error("processor unexpected result: ~p", [Unsupported]),
+                    {error, <<"unsupported_result">>}
+            catch
+                Class:Term:Trace ->
+                    logger:error("processor exception: ~p", [[Class, Term, Trace]]),
+                    {error, {exception, Class, Term}}
+            end,
+        {reply, Response, State}
+    end);
 handle_call(
     {complete_and_continue, StorageOpts, NsId, TaskResult, Process, Events, Task, OtelCtx},
     _From,
     #prg_sidecar_state{} = State
 ) ->
-    otel_tracer:with_span(
-        OtelCtx,
-        opentelemetry:get_application_tracer(?MODULE),
-        <<"complete and continue">>,
-        #{kind => internal},
-        fun(SpanCtx) ->
-            Fun = fun() ->
-                prg_storage:complete_and_continue(StorageOpts, NsId, TaskResult, Process, Events, Task)
-            end,
-            Response = do_with_retry(Fun, ?DEFAULT_DELAY, SpanCtx),
-            {reply, Response, State}
-        end
-    );
+    ?with_span(OtelCtx, <<"complete and continue">>, fun() ->
+        Fun = fun() ->
+            prg_storage:complete_and_continue(StorageOpts, NsId, TaskResult, Process, Events, Task)
+        end,
+        Response = do_with_retry(Fun, ?DEFAULT_DELAY),
+        {reply, Response, State}
+    end);
 handle_call(
     {remove_process, StorageOpts, NsId, ProcessId, OtelCtx},
     _From,
     #prg_sidecar_state{} = State
 ) ->
-    otel_tracer:with_span(
-        OtelCtx,
-        opentelemetry:get_application_tracer(?MODULE),
-        <<"remove process">>,
-        #{kind => internal},
-        fun(SpanCtx) ->
-            Fun = fun() ->
-                prg_storage:remove_process(StorageOpts, NsId, ProcessId)
-            end,
-            Response = do_with_retry(Fun, ?DEFAULT_DELAY, SpanCtx),
-            {reply, Response, State}
-        end
-    );
+    ?with_span(OtelCtx, <<"remove_process">>, fun() ->
+        Fun = fun() ->
+            prg_storage:remove_process(StorageOpts, NsId, ProcessId)
+        end,
+        Response = do_with_retry(Fun, ?DEFAULT_DELAY),
+        {reply, Response, State}
+    end);
 handle_call(
     {get_process, StorageOpts, NsId, ProcessId, HistoryRange, OtelCtx},
     _From,
     #prg_sidecar_state{} = State
 ) ->
-    otel_tracer:with_span(
-        OtelCtx, opentelemetry:get_application_tracer(?MODULE), <<"get process">>, #{kind => internal}, fun(SpanCtx) ->
-            Fun = fun() ->
-                prg_storage:get_process(internal, StorageOpts, NsId, ProcessId, HistoryRange)
-            end,
-            Response = do_with_retry(Fun, ?DEFAULT_DELAY, SpanCtx),
-            {reply, Response, State}
-        end
-    );
+    ?with_span(OtelCtx, <<"get process">>, fun() ->
+        Fun = fun() ->
+            prg_storage:get_process(internal, StorageOpts, NsId, ProcessId, HistoryRange)
+        end,
+        Response = do_with_retry(Fun, ?DEFAULT_DELAY),
+        {reply, Response, State}
+    end);
 handle_call(
     {get_task, StorageOpts, NsId, TaskId, OtelCtx},
     _From,
     #prg_sidecar_state{} = State
 ) ->
-    otel_tracer:with_span(
-        OtelCtx,
-        opentelemetry:get_application_tracer(?MODULE),
-        <<"get task">>,
-        #{kind => internal},
-        fun(SpanCtx) ->
-            Fun = fun() ->
-                prg_storage:get_task(StorageOpts, NsId, TaskId)
-            end,
-            Response = do_with_retry(Fun, ?DEFAULT_DELAY, SpanCtx),
-            {reply, Response, State}
-        end
-    );
+    ?with_span(OtelCtx, <<"get task">>, fun() ->
+        Fun = fun() ->
+            prg_storage:get_task(StorageOpts, NsId, TaskId)
+        end,
+        Response = do_with_retry(Fun, ?DEFAULT_DELAY),
+        {reply, Response, State}
+    end);
 handle_call(
     {complete_and_suspend, StorageOpts, NsId, TaskResult, Process, Events, OtelCtx},
     _From,
     #prg_sidecar_state{} = State
 ) ->
-    otel_tracer:with_span(
-        OtelCtx,
-        opentelemetry:get_application_tracer(?MODULE),
-        <<"complete and suspend">>,
-        #{kind => internal},
-        fun(SpanCtx) ->
-            Fun = fun() ->
-                prg_storage:complete_and_suspend(StorageOpts, NsId, TaskResult, Process, Events)
-            end,
-            Response = do_with_retry(Fun, ?DEFAULT_DELAY, SpanCtx),
-            {reply, Response, State}
-        end
-    );
+    ?with_span(OtelCtx, <<"complete and suspend">>, fun() ->
+        Fun = fun() ->
+            prg_storage:complete_and_suspend(StorageOpts, NsId, TaskResult, Process, Events)
+        end,
+        Response = do_with_retry(Fun, ?DEFAULT_DELAY),
+        {reply, Response, State}
+    end);
 handle_call(
     {complete_and_unlock, StorageOpts, NsId, TaskResult, Process, Events, OtelCtx},
     _From,
     #prg_sidecar_state{} = State
 ) ->
-    otel_tracer:with_span(
-        OtelCtx,
-        opentelemetry:get_application_tracer(?MODULE),
-        <<"complete and unlock">>,
-        #{kind => internal},
-        fun(SpanCtx) ->
-            Fun = fun() ->
-                prg_storage:complete_and_unlock(StorageOpts, NsId, TaskResult, Process, Events)
-            end,
-            Response = do_with_retry(Fun, ?DEFAULT_DELAY, SpanCtx),
-            {reply, Response, State}
-        end
-    );
+    ?with_span(OtelCtx, <<"complete and unlock">>, fun() ->
+        Fun = fun() ->
+            prg_storage:complete_and_unlock(StorageOpts, NsId, TaskResult, Process, Events)
+        end,
+        Response = do_with_retry(Fun, ?DEFAULT_DELAY),
+        {reply, Response, State}
+    end);
 handle_call(
     {complete_and_error, StorageOpts, NsId, TaskResult, Process, OtelCtx},
     _From,
     #prg_sidecar_state{} = State
 ) ->
-    otel_tracer:with_span(
-        OtelCtx,
-        opentelemetry:get_application_tracer(?MODULE),
-        <<"complete and error">>,
-        #{kind => internal},
-        fun(SpanCtx) ->
-            Fun = fun() ->
-                prg_storage:complete_and_error(StorageOpts, NsId, TaskResult, Process)
-            end,
-            Response = do_with_retry(Fun, ?DEFAULT_DELAY, SpanCtx),
-            {reply, Response, State}
-        end
-    );
+    ?with_span(OtelCtx, <<"complete and error">>, fun() ->
+        Fun = fun() ->
+            prg_storage:complete_and_error(StorageOpts, NsId, TaskResult, Process)
+        end,
+        Response = do_with_retry(Fun, ?DEFAULT_DELAY),
+        {reply, Response, State}
+    end);
 handle_call({event_sink, NsOpts, ProcessId, Events, OtelCtx}, _From, State) ->
-    otel_tracer:with_span(
-        OtelCtx,
-        opentelemetry:get_application_tracer(?MODULE),
-        <<"event sink">>,
-        #{kind => internal},
-        fun(SpanCtx) ->
-            Fun = fun() -> prg_notifier:event_sink(NsOpts, ProcessId, Events) end,
-            Response = do_with_retry(Fun, ?DEFAULT_DELAY, SpanCtx),
-            {reply, Response, State}
-        end
-    );
+    ?with_span(OtelCtx, <<"event sink">>, fun() ->
+        Fun = fun() -> prg_notifier:event_sink(NsOpts, ProcessId, Events) end,
+        Response = do_with_retry(Fun, ?DEFAULT_DELAY),
+        {reply, Response, State}
+    end);
 handle_call({lifecycle_sink, NsOpts, TaskType, ProcessId, OtelCtx}, _From, State) ->
-    otel_tracer:with_span(
-        OtelCtx,
-        opentelemetry:get_application_tracer(?MODULE),
-        <<"lifecycle sink">>,
-        #{kind => internal},
-        fun(SpanCtx) ->
-            Fun = fun() -> prg_notifier:lifecycle_sink(NsOpts, TaskType, ProcessId) end,
-            Response = do_with_retry(Fun, ?DEFAULT_DELAY, SpanCtx),
-            {reply, Response, State}
-        end
-    ).
+    ?with_span(OtelCtx, <<"lifecycle sink">>, fun() ->
+        Fun = fun() -> prg_notifier:lifecycle_sink(NsOpts, TaskType, ProcessId) end,
+        Response = do_with_retry(Fun, ?DEFAULT_DELAY),
+        {reply, Response, State}
+    end).
 
 handle_cast(_Request, #prg_sidecar_state{} = State) ->
     {noreply, State}.
@@ -389,10 +335,7 @@ code_change(_OldVsn, #prg_sidecar_state{} = State, _Extra) ->
 %%%===================================================================
 
 do_with_retry(Fun, Delay) ->
-    do_with_retry(Fun, Delay, undefined).
-
-do_with_retry(Fun, Delay, SpanCtx) ->
-    _ = otel_span:add_event(SpanCtx, <<"try">>, #{}),
+    _ = ?span_event(<<"try">>),
     try Fun() of
         ok = Result ->
             Result;
@@ -400,13 +343,13 @@ do_with_retry(Fun, Delay, SpanCtx) ->
             Result;
         Error ->
             _ = logger:error("result processing error: ~p", [Error]),
-            _ = otel_span:add_event(SpanCtx, <<"retryable error">>, #{}),
+            _ = ?span_event(<<"retryable error">>),
             timer:sleep(Delay),
             do_with_retry(Fun, Delay)
     catch
         Class:Error:Trace ->
             _ = logger:error("result processing exception: ~p", [[Class, Error, Trace]]),
-            _ = otel_span:record_exception(SpanCtx, Class, Error, Trace, #{}),
+            _ = ?span_exception(Class, Error, Trace),
             timer:sleep(Delay),
             do_with_retry(Fun, Delay)
     end.

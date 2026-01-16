@@ -1,6 +1,7 @@
 -module(progressor).
 
 -include("progressor.hrl").
+-include("otel.hrl").
 
 -define(TASK_REPEAT_REQUEST_TIMEOUT, 1000).
 -define(PREPARING_KEY, progressor_request_preparing_duration_ms).
@@ -176,7 +177,7 @@ cleanup_storage(#{ns := NsId, ns_opts := #{storage := StorageOpts}}) ->
 maybe_add_otel_ctx(#{otel_ctx := _} = Opts) ->
     Opts;
 maybe_add_otel_ctx(Opts) ->
-    Opts#{otel_ctx => otel_ctx:get_current()}.
+    Opts#{otel_ctx => ?current_otel_ctx}.
 
 add_ns_opts(#{ns := NsId} = Opts) ->
     NSs = application:get_env(progressor, namespaces, #{}),
@@ -240,17 +241,11 @@ do_simple_repair(#{task := _}) ->
     %% process will repaired via timeout task
     {ok, ok};
 do_simple_repair(#{ns_opts := #{storage := StorageOpts} = NsOpts, id := Id, ns := NsId, otel_ctx := OtelCtx}) ->
-    otel_tracer:with_span(
-        OtelCtx,
-        opentelemetry:get_application_tracer(?MODULE),
-        <<"simple repair">>,
-        #{kind => internal},
-        fun(_SpanCtx) ->
-            ok = prg_storage:repair_process(StorageOpts, NsId, Id),
-            ok = prg_notifier:lifecycle_sink(NsOpts, repair, Id),
-            {ok, ok}
-        end
-    ).
+    ?with_span(OtelCtx, <<"simple repair">>, fun() ->
+        ok = prg_storage:repair_process(StorageOpts, NsId, Id),
+        ok = prg_notifier:lifecycle_sink(NsOpts, repair, Id),
+        {ok, ok}
+    end).
 
 prepare(
     Fun,
@@ -340,34 +335,26 @@ do_get(
         otel_ctx := OtelCtx
     } = Req
 ) ->
-    otel_tracer:with_span(
-        OtelCtx,
-        opentelemetry:get_application_tracer(?MODULE),
-        <<"get">>,
-        #{kind => internal},
-        fun(_SpanCtx) ->
-            case prg_storage:get_process_with_initialization(StorageOpts, NsId, Id, HistoryRange) of
-                {ok, #{initialization := _TaskId}} ->
-                    %% init task not finished, await and retry
-                    Timeout = application:get_env(
-                        progressor, task_repeat_request_timeout, ?TASK_REPEAT_REQUEST_TIMEOUT
-                    ),
-                    timer:sleep(Timeout),
-                    do_get(Req);
-                Result ->
-                    Result
-            end
+    ?with_span(OtelCtx, <<"get">>, fun() ->
+        case prg_storage:get_process_with_initialization(StorageOpts, NsId, Id, HistoryRange) of
+            {ok, #{initialization := _TaskId}} ->
+                %% init task not finished, await and retry
+                Timeout = application:get_env(
+                    progressor, task_repeat_request_timeout, ?TASK_REPEAT_REQUEST_TIMEOUT
+                ),
+                timer:sleep(Timeout),
+                do_get(Req);
+            Result ->
+                Result
         end
-    );
+    end);
 do_get(Req) ->
     do_get(Req#{range => #{}}).
 
 do_trace(#{ns_opts := #{storage := StorageOpts}, id := Id, ns := NsId, otel_ctx := OtelCtx}) ->
-    otel_tracer:with_span(
-        OtelCtx, opentelemetry:get_application_tracer(?MODULE), <<"trace">>, #{kind => internal}, fun(_SpanCtx) ->
-            prg_storage:process_trace(StorageOpts, NsId, Id)
-        end
-    ).
+    ?with_span(OtelCtx, <<"trace">>, fun() ->
+        prg_storage:process_trace(StorageOpts, NsId, Id)
+    end).
 
 do_put(
     #{
@@ -378,33 +365,31 @@ do_put(
         otel_ctx := OtelCtx
     } = Opts
 ) ->
-    otel_tracer:with_span(
-        OtelCtx, opentelemetry:get_application_tracer(?MODULE), <<"put">>, #{kind => internal}, fun(_SpanCtx) ->
-            #{
-                process_id := ProcessId
-            } = Process,
-            Action = maps:get(action, Args, undefined),
-            Context = maps:get(context, Opts, <<>>),
-            Now = erlang:system_time(second),
-            InitTask = #{
-                process_id => ProcessId,
-                task_type => <<"init">>,
-                status => <<"finished">>,
-                args => <<>>,
-                context => Context,
-                response => term_to_binary({ok, ok}),
-                scheduled_time => Now,
-                running_time => Now,
-                finished_time => Now,
-                last_retry_interval => 0,
-                attempts_count => 0
-            },
-            ActiveTask = action_to_task(Action, ProcessId, Context),
-            ProcessData0 = #{process => Process, init_task => InitTask},
-            ProcessData = maybe_add_key(ActiveTask, active_task, ProcessData0),
-            prg_storage:put_process_data(StorageOpts, NsId, Id, ProcessData)
-        end
-    ).
+    ?with_span(OtelCtx, <<"put">>, fun() ->
+        #{
+            process_id := ProcessId
+        } = Process,
+        Action = maps:get(action, Args, undefined),
+        Context = maps:get(context, Opts, <<>>),
+        Now = erlang:system_time(second),
+        InitTask = #{
+            process_id => ProcessId,
+            task_type => <<"init">>,
+            status => <<"finished">>,
+            args => <<>>,
+            context => Context,
+            response => term_to_binary({ok, ok}),
+            scheduled_time => Now,
+            running_time => Now,
+            finished_time => Now,
+            last_retry_interval => 0,
+            attempts_count => 0
+        },
+        ActiveTask = action_to_task(Action, ProcessId, Context),
+        ProcessData0 = #{process => Process, init_task => InitTask},
+        ProcessData = maybe_add_key(ActiveTask, active_task, ProcessData0),
+        prg_storage:put_process_data(StorageOpts, NsId, Id, ProcessData)
+    end).
 
 do_health_check(#{ns := NsId, ns_opts := #{storage := StorageOpts}}) ->
     try prg_storage:health_check(StorageOpts) of
@@ -420,26 +405,24 @@ do_health_check(#{ns := NsId, ns_opts := #{storage := StorageOpts}}) ->
     end.
 
 process_call(#{ns_opts := NsOpts, ns := NsId, type := Type, task := Task, worker := Worker, otel_ctx := OtelCtx}) ->
-    otel_tracer:with_span(
-        OtelCtx, opentelemetry:get_application_tracer(?MODULE), <<"call">>, #{kind => internal}, fun(SpanCtx) ->
-            TimeoutSec = maps:get(process_step_timeout, NsOpts, ?DEFAULT_STEP_TIMEOUT_SEC),
-            Timeout = TimeoutSec * 1000,
-            Ref = make_ref(),
-            TaskHeader = make_task_header(Type, Ref),
-            ok = prg_worker:process_task(Worker, TaskHeader, Task),
-            ok = prg_scheduler:release_worker(NsId, self(), Worker),
-            %% TODO Maybe refactor to span inside scheduler gen_server
-            _ = otel_span:add_event(SpanCtx, <<"release worker">>, #{}),
-            %% see fun reply/2
-            receive
-                {Ref, Result} ->
-                    Result
-            after Timeout ->
-                _ = otel_span:record_exception(SpanCtx, throw, <<"timeout">>, [], #{}),
-                {error, <<"timeout">>}
-            end
+    ?with_span(OtelCtx, <<"call">>, fun() ->
+        TimeoutSec = maps:get(process_step_timeout, NsOpts, ?DEFAULT_STEP_TIMEOUT_SEC),
+        Timeout = TimeoutSec * 1000,
+        Ref = make_ref(),
+        TaskHeader = make_task_header(Type, Ref),
+        ok = prg_worker:process_task(Worker, TaskHeader, Task),
+        ok = prg_scheduler:release_worker(NsId, self(), Worker),
+        %% TODO Maybe refactor to span inside scheduler gen_server
+        _ = ?span_event(<<"release worker">>),
+        %% see fun reply/2
+        receive
+            {Ref, Result} ->
+                Result
+        after Timeout ->
+            _ = ?span_exception(throw, <<"timeout">>, []),
+            {error, <<"timeout">>}
         end
-    ).
+    end).
 
 make_task_header(init, Ref) ->
     {init, {self(), Ref}};
