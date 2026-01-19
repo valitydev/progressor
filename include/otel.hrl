@@ -8,8 +8,13 @@
 -define(span_exception(Class, Error, Stacktrace),
     otel_span:record_exception(?current_span_ctx, Class, Error, Stacktrace, #{})
 ).
+-define(span_exception(Class, Error, Message, Stacktrace),
+    otel_span:record_exception(?current_span_ctx, Class, Error, Message, Stacktrace, #{})
+).
 
 -define(span_event(EventName), otel_span:add_event(?current_span_ctx, EventName, #{})).
+
+-define(span_attributes(Attributes), otel_span:set_attributes(?current_span_ctx, Attributes)).
 
 -define(tracer, opentelemetry:get_application_tracer(?MODULE)).
 

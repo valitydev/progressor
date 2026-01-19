@@ -63,7 +63,8 @@ init([NsId, NsOpts]) ->
         {continue, do_start}}.
 
 handle_continue(do_start, #prg_worker_state{ns_id = NsId} = State) ->
-    ?with_span(<<"start">>, fun() ->
+    %% FIXME Worker w/o OTEL context, since it is not passed to init w/ `start_child`
+    ?with_span(<<"do start">>, fun() ->
         {ok, Pid} = prg_worker_sidecar:start_link(),
         case prg_scheduler:pop_task(NsId, self()) of
             {TaskHeader, Task} ->
@@ -87,8 +88,14 @@ handle_cast(
     } = State
 ) ->
     ?with_span(OtelCtx, <<"process task">>, fun() ->
-        Deadline = erlang:system_time(millisecond) + TimeoutSec * 1000,
         ProcessId = maps:get(process_id, Task),
+        ?span_attributes(#{
+            <<"progressor.process.type">> => atom_to_binary(element(1, TaskHeader)),
+            <<"progressor.process.id">> => ProcessId,
+            <<"progressor.process.namespace">> => NsId,
+            <<"progressor.process.task_id">> => maps:get(task_id, Task, undefined)
+        }),
+        Deadline = erlang:system_time(millisecond) + TimeoutSec * 1000,
         HistoryRange = maps:get(range, maps:get(metadata, Task, #{}), #{}),
         {ok, Process} = prg_worker_sidecar:get_process(Pid, Deadline, StorageOpts, NsId, ProcessId, HistoryRange),
         NewState = do_process_task(TaskHeader, Task, Deadline, State#prg_worker_state{process = Process}),
@@ -97,10 +104,18 @@ handle_cast(
 handle_cast(
     {continuation_task, TaskHeader, Task, OtelCtx},
     #prg_worker_state{
+        ns_id = NsId,
         ns_opts = #{process_step_timeout := TimeoutSec}
     } = State
 ) ->
     ?with_span(OtelCtx, <<"process continuation">>, fun() ->
+        ProcessId = maps:get(process_id, Task),
+        ?span_attributes(#{
+            <<"progressor.process.type">> => atom_to_binary(element(1, TaskHeader)),
+            <<"progressor.process.id">> => ProcessId,
+            <<"progressor.process.namespace">> => NsId,
+            <<"progressor.process.task_id">> => maps:get(task_id, Task, undefined)
+        }),
         Deadline = erlang:system_time(millisecond) + TimeoutSec * 1000,
         NewState = do_process_task(TaskHeader, Task, Deadline, State),
         {noreply, NewState}

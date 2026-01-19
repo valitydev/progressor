@@ -213,10 +213,12 @@ handle_call(
                     ERR;
                 Unsupported ->
                     logger:error("processor unexpected result: ~p", [Unsupported]),
+                    _ = ?span_exception(error, badmatch, <<"unsupported_result">>, []),
                     {error, <<"unsupported_result">>}
             catch
                 Class:Term:Trace ->
                     logger:error("processor exception: ~p", [[Class, Term, Trace]]),
+                    _ = ?span_exception(Class, Term, Trace),
                     {error, {exception, Class, Term}}
             end,
         {reply, Response, State}

@@ -1,7 +1,6 @@
 -module(prg_scheduler).
 
 -include("progressor.hrl").
--include("otel.hrl").
 
 -behaviour(gen_server).
 
@@ -41,7 +40,7 @@ push_task(NsId, TaskHeader, Task) ->
 -spec pop_task(namespace_id(), pid()) -> {task_header(), task()} | not_found.
 pop_task(NsId, Worker) ->
     RegName = prg_utils:registered_name(NsId, "_scheduler"),
-    gen_server:call(RegName, {pop_task, Worker, ?current_otel_ctx}, infinity).
+    gen_server:call(RegName, {pop_task, Worker}, infinity).
 
 %% Deprecated
 -spec continuation_task(namespace_id(), pid(), task()) -> {task_header(), task()} | ok.
@@ -96,16 +95,14 @@ init({NsId, Opts}) ->
     },
     {ok, State}.
 
-handle_call({pop_task, Worker, OtelCtx}, _From, State) ->
-    ?with_span(OtelCtx, <<"pop task">>, fun() ->
-        case queue:out(State#prg_scheduler_state.ready) of
-            {{value, TaskData}, NewReady} ->
-                {reply, TaskData, State#prg_scheduler_state{ready = NewReady}};
-            {empty, _} ->
-                Workers = State#prg_scheduler_state.free_workers,
-                {reply, not_found, State#prg_scheduler_state{free_workers = queue:in(Worker, Workers)}}
-        end
-    end);
+handle_call({pop_task, Worker}, _From, State) ->
+    case queue:out(State#prg_scheduler_state.ready) of
+        {{value, TaskData}, NewReady} ->
+            {reply, TaskData, State#prg_scheduler_state{ready = NewReady}};
+        {empty, _} ->
+            Workers = State#prg_scheduler_state.free_workers,
+            {reply, not_found, State#prg_scheduler_state{free_workers = queue:in(Worker, Workers)}}
+    end;
 handle_call(count_workers, _From, #prg_scheduler_state{free_workers = Workers} = State) ->
     {reply, queue:len(Workers), State};
 handle_call(
