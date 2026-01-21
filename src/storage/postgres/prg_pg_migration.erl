@@ -241,6 +241,24 @@ db_init(#{pool := Pool}, NsId) ->
                         )
                 end,
 
+            %% MIGRATION 3
+            %% Expand prosess_status enumeration
+            {ok, _, [{IsInitStatusExists}]} = epg_pool:query(
+                Connection,
+                "select exists (SELECT 1 FROM pg_enum WHERE "
+                "  enumtypid = 'process_status'::regtype and enumlabel = 'init')"
+            ),
+            _ =
+                case IsInitStatusExists of
+                    true ->
+                        ok;
+                    false ->
+                        {ok, _, _} = epg_pool:query(
+                            Connection,
+                            "ALTER TYPE process_status ADD VALUE 'init'"
+                        )
+                end,
+
             %%% END
             {ok, [], []}
         end

@@ -1,4 +1,4 @@
-CREATE TYPE process_status AS ENUM ('running', 'error');
+CREATE TYPE process_status AS ENUM ('init', 'running', 'error');
 CREATE TYPE task_status AS ENUM ('waiting', 'running', 'blocked', 'error', 'finished', 'cancelled');
 CREATE TYPE task_type AS ENUM ('init', 'timeout', 'call', 'notify', 'repair', 'remove');
 

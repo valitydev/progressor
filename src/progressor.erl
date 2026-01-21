@@ -311,8 +311,8 @@ await_task_result(StorageOpts, NsId, KeyOrId, StepTimeout, Duration) ->
     end.
 
 do_get(#{ns_opts := #{storage := StorageOpts}, id := Id, ns := NsId, range := HistoryRange} = Req) ->
-    case prg_storage:get_process_with_initialization(StorageOpts, NsId, Id, HistoryRange) of
-        {ok, #{initialization := _TaskId}} ->
+    case prg_storage:get_process(external, StorageOpts, NsId, Id, HistoryRange) of
+        {ok, #{status := <<"init">>}} ->
             %% init task not finished, await and retry
             Timeout = application:get_env(progressor, task_repeat_request_timeout, ?TASK_REPEAT_REQUEST_TIMEOUT),
             timer:sleep(Timeout),

@@ -14,7 +14,6 @@
 -export([prepare_repair/4]).
 -export([put_process_data/4]).
 -export([process_trace/3]).
--export([get_process_with_initialization/4]).
 -export([repair_process/3]).
 
 %% scan functions
@@ -127,32 +126,6 @@ get_process(Recipient, PgOpts, NsId, ProcessId, HistoryRange) ->
         Pool,
         fun(Connection) ->
             case do_get_process(Connection, ProcessesTable, ProcessId) of
-                {ok, _, []} ->
-                    {error, <<"process not found">>};
-                {ok, ColumnsPr, RowsPr} ->
-                    {ok, _, _} =
-                        {ok, ColumnstEv, RowsEv} = do_get_events(Connection, EventsTable, ProcessId, RangeCondition),
-                    LastEventId = get_last_event_id(Connection, EventsTable, ProcessId),
-                    {ok, {ColumnsPr, RowsPr}, {ColumnstEv, RowsEv}, LastEventId}
-            end
-        end
-    ),
-    parse_process_info(RawResult, HistoryRange).
-
--spec get_process_with_initialization(pg_opts(), namespace_id(), id(), history_range()) ->
-    {ok, process()} | {error, _Reason}.
-get_process_with_initialization(PgOpts, NsId, ProcessId, HistoryRange) ->
-    Pool = get_pool(external, PgOpts),
-    #{
-        processes := ProcessesTable,
-        running := RunningTable,
-        events := EventsTable
-    } = prg_pg_utils:tables(NsId),
-    RangeCondition = create_range_condition(HistoryRange),
-    RawResult = epg_pool:transaction(
-        Pool,
-        fun(Connection) ->
-            case do_get_process_with_initialization(Connection, ProcessesTable, RunningTable, ProcessId) of
                 {ok, _, []} ->
                     {error, <<"process not found">>};
                 {ok, ColumnsPr, RowsPr} ->
@@ -749,20 +722,6 @@ do_get_process(Connection, Table, ProcessId) ->
     epg_pool:query(
         Connection,
         "SELECT * FROM " ++ Table ++ " WHERE process_id = $1",
-        [ProcessId]
-    ).
-
-do_get_process_with_initialization(Connection, ProcessesTable, RunningTable, ProcessId) ->
-    SQL =
-        "SELECT"
-        "  pr.*, rt.task_id as initialization FROM " ++ ProcessesTable ++
-            " pr "
-            "  LEFT JOIN " ++ RunningTable ++
-            " rt ON pr.process_id = rt.process_id AND rt.task_type = 'init'"
-            "  WHERE pr.process_id = $1",
-    epg_pool:query(
-        Connection,
-        SQL,
         [ProcessId]
     ).
 

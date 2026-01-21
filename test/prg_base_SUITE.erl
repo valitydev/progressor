@@ -36,7 +36,7 @@
 -export([task_race_condition_hack_test/1]).
 
 -define(NS(C), proplists:get_value(ns_id, C, 'default/default')).
--define(AWAIT_TIMEOUT(C), proplists:get_value(repl_timeout, C, 0)).
+-define(AWAIT_TIMEOUT(C), proplists:get_value(repl_timeout, C, 5)).
 
 init_per_suite(Config) ->
     Config.
@@ -1410,12 +1410,12 @@ mock_processor(put_process_with_timeout_test = TestCase) ->
 mock_processor(task_race_condition_hack_test = TestCase) ->
     Self = self(),
     MockProcessor = fun({init, <<"init_args">>, _Process}, _Opts, _Ctx) ->
+        Self ! 1,
         timer:sleep(3000),
         Result = #{
             events => [event(1)],
             aux_state => <<"aux_state">>
         },
-        Self ! 1,
         {ok, Result}
     end,
     mock_processor(TestCase, MockProcessor).
