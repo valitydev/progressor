@@ -127,7 +127,7 @@
 -type task_id() :: pos_integer().
 
 -type process_status() :: binary().
-% <<"running">> | <<"error">>
+% <<"init">> | <<"running">> | <<"error">>
 
 -type task_status() :: binary().
 % <<"waiting">> | <<"running">> | <<"blocked">> | <<"error">> | <<"finished">> | <<"cancelled">>
@@ -219,8 +219,8 @@
 
 -define(NEW_PROCESS(ID), #{
     process_id => ProcessId,
-    status => <<"running">>,
-    previous_status => <<"running">>,
+    status => <<"init">>,
+    previous_status => <<"init">>,
     created_at => erlang:system_time(second),
     status_changed_at => erlang:system_time(second)
 }).

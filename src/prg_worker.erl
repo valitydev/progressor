@@ -576,28 +576,26 @@ error_and_retry({error, Reason} = Response, TaskHeader, Task, Deadline, State) -
 update_process(#{status := <<"error">>, process_id := ProcessId} = Process, {error, _}) ->
     %% process error when already broken
     {Process, #{process_id => ProcessId}};
-update_process(#{status := <<"running">>, process_id := ProcessId} = Process, {error, {Detail, Cause}}) ->
-    %% process broken (transition from running to error)
+update_process(#{status := Status, process_id := ProcessId} = Process, {error, {Detail, Cause}}) when
+    Status =:= <<"running">>;
+    Status =:= <<"init">>
+->
+    %% process broken (transition from running/init to error)
     StatusChangedAt = erlang:system_time(second),
-    NewProcess =
-        case Cause of
-            undefined ->
-                Process#{status => <<"error">>, detail => Detail};
-            TaskId ->
-                Process#{status => <<"error">>, detail => Detail, corrupted_by => TaskId}
-        end,
     ProcessUpdates = #{
         process_id => ProcessId,
         status => <<"error">>,
-        previous_status => <<"running">>,
+        previous_status => Status,
         status_changed_at => StatusChangedAt,
-        detail => Detail,
-        corrupted_by => Cause
+        detail => Detail
     },
-    {
-        NewProcess,
-        ProcessUpdates
-    };
+    case Cause of
+        undefined ->
+            {maps:merge(Process, ProcessUpdates), ProcessUpdates};
+        TaskId ->
+            Updates = ProcessUpdates#{corrupted_by => TaskId},
+            {maps:merge(Process, Updates), Updates}
+    end;
 update_process(#{status := <<"error">>, process_id := ProcessId} = Process, Intent) ->
     %% process repaired (transition from error to running)
     StatusChangedAt = erlang:system_time(second),
@@ -613,6 +611,26 @@ update_process(#{status := <<"error">>, process_id := ProcessId} = Process, Inte
         detail => undefined,
         corrupted_by => undefined
     },
+    update_process_from_intent(NewProcess, ProcessUpdates, Intent);
+update_process(#{status := <<"init">>, process_id := ProcessId} = Process, Intent) ->
+    %% transition from init to running
+    StatusChangedAt = erlang:system_time(second),
+    ProcessUpdates = #{
+        process_id => ProcessId,
+        status => <<"running">>,
+        previous_status => <<"init">>,
+        status_changed_at => StatusChangedAt
+    },
+    NewProcess = maps:merge(Process, ProcessUpdates),
+    update_process_from_intent(NewProcess, ProcessUpdates, Intent);
+update_process(#{previous_status := <<"init">>, status := <<"running">>, process_id := ProcessId} = Process, Intent) ->
+    %% first transition from running to running, need to update previous_status
+    ProcessUpdates = #{
+        process_id => ProcessId,
+        status => <<"running">>,
+        previous_status => <<"running">>
+    },
+    NewProcess = maps:merge(Process, ProcessUpdates),
     update_process_from_intent(NewProcess, ProcessUpdates, Intent);
 update_process(#{status := <<"running">>, process_id := ProcessId} = Process, Intent) ->
     %% normal work
