@@ -41,7 +41,7 @@ continuation_task(Worker, TaskHeader, Task) ->
 -spec next_task(pid()) -> ok.
 next_task(Worker) ->
     _ = ?span_event(<<"next task">>),
-    gen_server:cast(Worker, next_task).
+    gen_server:cast(Worker, next_9task).
 
 -spec process_scheduled_task(pid(), id(), task_id()) -> ok.
 process_scheduled_task(Worker, ProcessId, TaskId) ->
@@ -64,17 +64,14 @@ init([NsId, NsOpts]) ->
 
 handle_continue(do_start, #prg_worker_state{ns_id = NsId} = State) ->
     %% FIXME Worker w/o OTEL context, since it is not passed to init w/ `start_child`
-    ?with_span(<<"do start">>, fun() ->
-        {ok, Pid} = prg_worker_sidecar:start_link(),
-        case prg_scheduler:pop_task(NsId, self()) of
-            {TaskHeader, Task} ->
-                ok = process_task(self(), TaskHeader, Task);
-            not_found ->
-                _ = ?span_event(<<"no task">>),
-                skip
-        end,
-        {noreply, State#prg_worker_state{sidecar_pid = Pid}}
-    end).
+    {ok, Pid} = prg_worker_sidecar:start_link(),
+    case prg_scheduler:pop_task(NsId, self()) of
+        {TaskHeader, Task} ->
+            ok = process_task(self(), TaskHeader, Task);
+        not_found ->
+            skip
+    end,
+    {noreply, State#prg_worker_state{sidecar_pid = Pid}}.
 
 handle_call(_Request, _From, #prg_worker_state{} = State) ->
     {reply, ok, State}.

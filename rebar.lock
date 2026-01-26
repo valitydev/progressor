@@ -18,7 +18,7 @@
  {<<"kafka_protocol">>,{pkg,<<"kafka_protocol">>,<<"4.1.10">>},1},
  {<<"mg_proto">>,
   {git,"https://github.com/valitydev/machinegun-proto.git",
-       {ref,"3decc8f8b13c9cd1701deab47781aacddd7dbc92"}},
+       {ref,"cc2c27c30d30dc34c0c56fc7c7e96326d6bd6a14"}},
   0},
  {<<"opentelemetry_api">>,{pkg,<<"opentelemetry_api">>,<<"1.4.0">>},0},
  {<<"prometheus">>,{pkg,<<"prometheus">>,<<"4.11.0">>},0},

@@ -150,7 +150,7 @@ remove_process(Pid, _Deadline, StorageOpts, NsId, ProcessId) ->
 event_sink(Pid, Deadline, #{namespace := NS} = NsOpts, ProcessId, Events) ->
     Timeout = Deadline - erlang:system_time(millisecond),
     Fun = fun() ->
-        gen_server:call(Pid, {event_sink, NsOpts, ProcessId, Events, ?current_otel_ctx}, Timeout)
+        gen_server:call(Pid, {event_sink, NsOpts, ProcessId, Events}, Timeout)
     end,
     prg_utils:with_observe(Fun, ?NOTIFICATION_KEY, [NS, "event_sink"]).
 
@@ -159,7 +159,7 @@ event_sink(Pid, Deadline, #{namespace := NS} = NsOpts, ProcessId, Events) ->
 lifecycle_sink(Pid, Deadline, #{namespace := NS} = NsOpts, TaskType, ProcessId) ->
     Timeout = Deadline - erlang:system_time(millisecond),
     Fun = fun() ->
-        gen_server:call(Pid, {lifecycle_sink, NsOpts, TaskType, ProcessId, ?current_otel_ctx}, Timeout)
+        gen_server:call(Pid, {lifecycle_sink, NsOpts, TaskType, ProcessId}, Timeout)
     end,
     prg_utils:with_observe(Fun, ?NOTIFICATION_KEY, [NS, "lifecycle_sink"]).
 %%
@@ -168,19 +168,19 @@ lifecycle_sink(Pid, Deadline, #{namespace := NS} = NsOpts, TaskType, ProcessId) 
     {ok, process()} | {error, _Reason}.
 get_process(Pid, _Deadline, StorageOpts, NsId, ProcessId) ->
     %% Timeout = Deadline - erlang:system_time(millisecond),
-    gen_server:call(Pid, {get_process, StorageOpts, NsId, ProcessId, #{}, ?current_otel_ctx}, infinity).
+    gen_server:call(Pid, {get_process, StorageOpts, NsId, ProcessId, #{}}, infinity).
 
 -spec get_process(pid(), timestamp_ms(), storage_opts(), namespace_id(), id(), history_range()) ->
     {ok, process()} | {error, _Reason}.
 get_process(Pid, _Deadline, StorageOpts, NsId, ProcessId, HistoryRange) ->
     %% Timeout = Deadline - erlang:system_time(millisecond),
-    gen_server:call(Pid, {get_process, StorageOpts, NsId, ProcessId, HistoryRange, ?current_otel_ctx}, infinity).
+    gen_server:call(Pid, {get_process, StorageOpts, NsId, ProcessId, HistoryRange}, infinity).
 
 -spec get_task(pid(), timestamp_ms(), storage_opts(), namespace_id(), task_id()) ->
     {ok, task()} | {error, _Reason}.
 get_task(Pid, _Deadline, StorageOpts, NsId, TaskId) ->
     %% Timeout = Deadline - erlang:system_time(millisecond),
-    gen_server:call(Pid, {get_task, StorageOpts, NsId, TaskId, ?current_otel_ctx}, infinity).
+    gen_server:call(Pid, {get_task, StorageOpts, NsId, TaskId}, infinity).
 
 %%%===================================================================
 %%% Spawning and gen_server implementation
@@ -203,7 +203,9 @@ handle_call(
     _From,
     #prg_sidecar_state{} = State
 ) ->
-    ?with_span(OtelCtx, <<"process">>, fun() ->
+    ?with_span(OtelCtx, <<"process with handler">>, fun() ->
+        %% NOTE Opaque callback `Handler:process/3` will have access to this
+        %% erlang process's dictionary and OTEL context.
         Response =
             try Handler:process(Request, Options, Ctx) of
                 {ok, _Result} = OK ->
@@ -248,29 +250,25 @@ handle_call(
         {reply, Response, State}
     end);
 handle_call(
-    {get_process, StorageOpts, NsId, ProcessId, HistoryRange, OtelCtx},
+    {get_process, StorageOpts, NsId, ProcessId, HistoryRange},
     _From,
     #prg_sidecar_state{} = State
 ) ->
-    ?with_span(OtelCtx, <<"get process">>, fun() ->
-        Fun = fun() ->
-            prg_storage:get_process(internal, StorageOpts, NsId, ProcessId, HistoryRange)
-        end,
-        Response = do_with_retry(Fun, ?DEFAULT_DELAY),
-        {reply, Response, State}
-    end);
+    Fun = fun() ->
+        prg_storage:get_process(internal, StorageOpts, NsId, ProcessId, HistoryRange)
+    end,
+    Response = do_with_retry(Fun, ?DEFAULT_DELAY),
+    {reply, Response, State};
 handle_call(
-    {get_task, StorageOpts, NsId, TaskId, OtelCtx},
+    {get_task, StorageOpts, NsId, TaskId},
     _From,
     #prg_sidecar_state{} = State
 ) ->
-    ?with_span(OtelCtx, <<"get task">>, fun() ->
-        Fun = fun() ->
-            prg_storage:get_task(StorageOpts, NsId, TaskId)
-        end,
-        Response = do_with_retry(Fun, ?DEFAULT_DELAY),
-        {reply, Response, State}
-    end);
+    Fun = fun() ->
+        prg_storage:get_task(StorageOpts, NsId, TaskId)
+    end,
+    Response = do_with_retry(Fun, ?DEFAULT_DELAY),
+    {reply, Response, State};
 handle_call(
     {complete_and_suspend, StorageOpts, NsId, TaskResult, Process, Events, OtelCtx},
     _From,
@@ -307,18 +305,14 @@ handle_call(
         Response = do_with_retry(Fun, ?DEFAULT_DELAY),
         {reply, Response, State}
     end);
-handle_call({event_sink, NsOpts, ProcessId, Events, OtelCtx}, _From, State) ->
-    ?with_span(OtelCtx, <<"event sink">>, fun() ->
-        Fun = fun() -> prg_notifier:event_sink(NsOpts, ProcessId, Events) end,
-        Response = do_with_retry(Fun, ?DEFAULT_DELAY),
-        {reply, Response, State}
-    end);
-handle_call({lifecycle_sink, NsOpts, TaskType, ProcessId, OtelCtx}, _From, State) ->
-    ?with_span(OtelCtx, <<"lifecycle sink">>, fun() ->
-        Fun = fun() -> prg_notifier:lifecycle_sink(NsOpts, TaskType, ProcessId) end,
-        Response = do_with_retry(Fun, ?DEFAULT_DELAY),
-        {reply, Response, State}
-    end).
+handle_call({event_sink, NsOpts, ProcessId, Events}, _From, State) ->
+    Fun = fun() -> prg_notifier:event_sink(NsOpts, ProcessId, Events) end,
+    Response = do_with_retry(Fun, ?DEFAULT_DELAY),
+    {reply, Response, State};
+handle_call({lifecycle_sink, NsOpts, TaskType, ProcessId}, _From, State) ->
+    Fun = fun() -> prg_notifier:lifecycle_sink(NsOpts, TaskType, ProcessId) end,
+    Response = do_with_retry(Fun, ?DEFAULT_DELAY),
+    {reply, Response, State}.
 
 handle_cast(_Request, #prg_sidecar_state{} = State) ->
     {noreply, State}.
