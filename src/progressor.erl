@@ -1,6 +1,7 @@
 -module(progressor).
 
 -include("progressor.hrl").
+-include("otel.hrl").
 
 -define(TASK_REPEAT_REQUEST_TIMEOUT, 1000).
 -define(PREPARING_KEY, progressor_request_preparing_duration_ms).
@@ -29,6 +30,7 @@
     id := id(),
     args => term(),
     idempotency_key => binary(),
+    otel_ctx => otel_ctx:t(),
     context => binary(),
     range => history_range(),
     options => map(),
@@ -115,7 +117,7 @@ put(Req) ->
         Req
     ).
 
--spec trace(request()) -> {ok, _Result} | {error, _Reason}.
+-spec trace(request()) -> {ok, _Result :: term()} | {error, _Reason :: term()}.
 trace(Req) ->
     prg_utils:pipe(
         [
@@ -325,15 +327,7 @@ do_get(Req) ->
 
 do_trace(#{ns_opts := #{storage := StorageOpts}, id := Id, ns := NsId}) ->
     prg_storage:process_trace(StorageOpts, NsId, Id).
-
-do_put(
-    #{
-        ns_opts := #{storage := StorageOpts},
-        id := Id,
-        ns := NsId,
-        args := #{process := Process} = Args
-    } = Opts
-) ->
+do_put(#{ns_opts := #{storage := StorageOpts}, id := Id, ns := NsId, args := #{process := Process} = Args} = Opts) ->
     #{
         process_id := ProcessId
     } = Process,
@@ -378,11 +372,14 @@ process_call(#{ns_opts := NsOpts, ns := NsId, type := Type, task := Task, worker
     TaskHeader = make_task_header(Type, Ref),
     ok = prg_worker:process_task(Worker, TaskHeader, Task),
     ok = prg_scheduler:release_worker(NsId, self(), Worker),
+    %% TODO Maybe refactor to span inside scheduler gen_server
+    _ = ?span_event(<<"release worker">>),
     %% see fun reply/2
     receive
         {Ref, Result} ->
             Result
     after Timeout ->
+        _ = ?span_exception(throw, <<"timeout">>, []),
         {error, <<"timeout">>}
     end.
 

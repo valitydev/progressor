@@ -11,7 +11,8 @@
         epg_connector,
         thrift,
         mg_proto,
-        brod
+        brod,
+        opentelemetry_api
     ]},
     {env, []},
     {modules, []},

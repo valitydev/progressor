@@ -16,7 +16,7 @@ DEV_IMAGE_ID = $(file < .image.dev)
 
 DOCKER ?= docker
 DOCKERCOMPOSE ?= docker compose
-DOCKERCOMPOSE_W_ENV = DEV_IMAGE_TAG=$(DEV_IMAGE_TAG) $(DOCKERCOMPOSE) -f docker-compose.yml
+DOCKERCOMPOSE_W_ENV = DEV_IMAGE_TAG=$(DEV_IMAGE_TAG) $(DOCKERCOMPOSE) -f docker-compose.yml -f compose.tracing.yaml
 REBAR ?= rebar3
 TEST_CONTAINER_NAME ?= testrunner
 
