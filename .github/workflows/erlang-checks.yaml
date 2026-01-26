@@ -30,13 +30,13 @@ jobs:
   run:
     name: Run checks
     needs: setup
-    uses: valitydev/erlang-workflows/.github/workflows/erlang-parallel-build.yml@v1.0.17
+    uses: valitydev/erlang-workflows/.github/workflows/erlang-parallel-build.yml@v1
     with:
       otp-version: ${{ needs.setup.outputs.otp-version }}
       rebar-version: ${{ needs.setup.outputs.rebar-version }}
       use-thrift: true
       thrift-version: ${{ needs.setup.outputs.thrift-version }}
       run-ct-with-compose: true
-      cache-version: v2
+      cache-version: v1
       use-coveralls: true
       upload-coverage: false
