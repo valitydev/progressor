@@ -41,7 +41,7 @@ continuation_task(Worker, TaskHeader, Task) ->
 -spec next_task(pid()) -> ok.
 next_task(Worker) ->
     _ = ?span_event(<<"next task">>),
-    gen_server:cast(Worker, next_9task).
+    gen_server:cast(Worker, next_task).
 
 -spec process_scheduled_task(pid(), id(), task_id()) -> ok.
 process_scheduled_task(Worker, ProcessId, TaskId) ->
