@@ -75,7 +75,7 @@ CREATE TABLE IF NOT EXISTS namespace_events(
     FOREIGN KEY ("task_id") REFERENCES namespace_tasks ("task_id")
 );
 
-CREATE INDEX IF NOT EXISTS "process_idx" on namespace_events USING HASH ("process_id");
-CREATE INDEX IF NOT EXISTS "process_idx" on namespace_tasks USING HASH ("process_id");
-CREATE INDEX IF NOT EXISTS "process_idx" on namespace_schedule USING HASH ("process_id");
-CREATE INDEX IF NOT EXISTS "task_idx" on namespace_running USING HASH ("task_id");
+CREATE INDEX IF NOT EXISTS "namespace_events_process_idx" on namespace_events USING HASH ("process_id");
+CREATE INDEX IF NOT EXISTS "namespace_tasks_process_idx" on namespace_tasks USING HASH ("process_id");
+CREATE INDEX IF NOT EXISTS "namespace_schedule_process_idx" on namespace_schedule USING HASH ("process_id");
+CREATE INDEX IF NOT EXISTS "namespace_running_task_idx" on namespace_running USING HASH ("task_id");

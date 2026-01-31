@@ -165,23 +165,24 @@ db_init(#{pool := Pool}, NsId) ->
                     " (process_id), "
                     "FOREIGN KEY (task_id) REFERENCES " ++ TaskTable ++ " (task_id))"
             ),
+            %% DELETED VIA MIGRATION 4
             %% create indexes
-            {ok, _, _} = epg_pool:query(
-                Connection,
-                "CREATE INDEX IF NOT EXISTS process_idx on " ++ EventsTable ++ " USING HASH (process_id)"
-            ),
-            {ok, _, _} = epg_pool:query(
-                Connection,
-                "CREATE INDEX IF NOT EXISTS process_idx on " ++ TaskTable ++ " USING HASH (process_id)"
-            ),
-            {ok, _, _} = epg_pool:query(
-                Connection,
-                "CREATE INDEX IF NOT EXISTS process_idx on " ++ ScheduleTable ++ " USING HASH (process_id)"
-            ),
-            {ok, _, _} = epg_pool:query(
-                Connection,
-                "CREATE INDEX IF NOT EXISTS task_idx on " ++ RunningTable ++ " USING HASH (task_id)"
-            ),
+            %{ok, _, _} = epg_pool:query(
+            %    Connection,
+            %    "CREATE INDEX IF NOT EXISTS process_idx on " ++ EventsTable ++ " USING HASH (process_id)"
+            %),
+            %{ok, _, _} = epg_pool:query(
+            %    Connection,
+            %    "CREATE INDEX IF NOT EXISTS process_idx on " ++ TaskTable ++ " USING HASH (process_id)"
+            %),
+            %{ok, _, _} = epg_pool:query(
+            %    Connection,
+            %%    "CREATE INDEX IF NOT EXISTS process_idx on " ++ ScheduleTable ++ " USING HASH (process_id)"
+            %),
+            %{ok, _, _} = epg_pool:query(
+            %    Connection,
+            %    "CREATE INDEX IF NOT EXISTS task_idx on " ++ RunningTable ++ " USING HASH (task_id)"
+            %),
 
             %% MIGRATIONS
             %% MIGRATION 1
@@ -259,6 +260,15 @@ db_init(#{pool := Pool}, NsId) ->
                         )
                 end,
 
+            %% MIGRATION 4
+            %% Drop wrong indexes if exists, create new indexes
+            {ok, _, _} = drop_index(Connection, "process_idx"),
+            {ok, _, _} = drop_index(Connection, "task_idx"),
+            {ok, _, _} = create_index(Connection, EventsTable, "process_idx", "(process_id)"),
+            {ok, _, _} = create_index(Connection, TaskTable, "process_idx", "(process_id)"),
+            {ok, _, _} = create_index(Connection, ScheduleTable, "process_idx", "(process_id)"),
+            {ok, _, _} = create_index(Connection, RunningTable, "task_idx", "(task_id)"),
+
             %%% END
             {ok, [], []}
         end
@@ -287,3 +297,42 @@ cleanup(#{pool := Pool}, NsId) ->
         end
     ),
     ok.
+
+%%
+
+drop_index(Connection, IndexName) ->
+    {ok, _, [{IsIndexExists}]} = epg_pool:query(
+        Connection,
+        "SELECT EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = $1)",
+        [IndexName]
+    ),
+    case IsIndexExists of
+        true ->
+            epg_pool:query(Connection, "DROP INDEX " ++ IndexName);
+        false ->
+            {ok, [], []}
+    end.
+
+create_index(Connection, Table, Index, Fields) ->
+    create_index(Connection, Table, Index, " HASH ", Fields).
+
+create_index(Connection, Table, Index, IndexType, Fields) ->
+    %% unwrap table name and wrap index name
+    IndexName = "\"" ++ string:replace(Table, "\"", "", all) ++ "_" ++ Index ++ "\"",
+    %% re-wrap for using in WHERE section
+    IndexNameStr = string:replace(IndexName, "\"", "'", all),
+    {ok, _, [{IsIndexExists}]} = epg_pool:query(
+        Connection,
+        "SELECT EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = " ++ IndexNameStr ++ " )"
+    ),
+    case IsIndexExists of
+        true ->
+            {ok, [], []};
+        false ->
+            epg_pool:query(
+                Connection,
+                "CREATE INDEX " ++ IndexName ++
+                    " on " ++ Table ++
+                    " USING " ++ IndexType ++ " " ++ Fields
+            )
+    end.
