@@ -1,6 +1,8 @@
 -ifndef(__progressor_otel__).
 -define(__progressor_otel__, ok).
 
+-include_lib("opentelemetry_api/include/opentelemetry.hrl").
+
 -define(current_otel_ctx, otel_ctx:get_current()).
 
 -define(current_span_ctx, otel_tracer:current_span_ctx(?current_otel_ctx)).
@@ -18,8 +20,9 @@
 
 -define(tracer, opentelemetry:get_application_tracer(?MODULE)).
 
+%% TODO Maybe add macros for distinct span kinds, like SPAN_KIND_PRODUCER or SPAN_KIND_CONSUMER
 -define(with_span(OtelCtx, SpanName, Fun),
-    otel_tracer:with_span(OtelCtx, ?tracer, SpanName, #{kind => internal}, fun(_SpanCtx) -> Fun() end)
+    otel_tracer:with_span(OtelCtx, ?tracer, SpanName, #{kind => ?SPAN_KIND_SERVER}, fun(_SpanCtx) -> Fun() end)
 ).
 -define(with_span(SpanName, Fun), ?with_span(?current_otel_ctx, SpanName, Fun)).
 
