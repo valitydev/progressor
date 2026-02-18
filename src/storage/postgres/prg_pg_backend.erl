@@ -213,7 +213,7 @@ process_trace(PgOpts, NsId, ProcessId) ->
             "LEFT JOIN " ++ EventsTable ++
             " ne "
             "ON nt.task_id = ne.task_id AND nt.process_id = ne.process_id "
-            "WHERE nt.process_id = $1 ORDER BY nt.task_id, ne.event_id",
+            "WHERE nt.process_id = $1 ORDER BY nt.running_time, nt.finished_time, nt.task_id",
         [ProcessId]
     ),
     case Result of
@@ -1001,15 +1001,18 @@ do_complete_task(Connection, TaskTable, ScheduleTable, RunningTable, TaskResult)
         status := Status
     } = TaskResult,
     Response = maps:get(response, TaskResult, null),
+    RunningTime1 = maps:get(running_time, TaskResult, null),
     FinishedTime = maps:get(finished_time, TaskResult, erlang:system_time(second)),
     {ok, _} = epg_pool:query(
         Connection,
         "WITH deleted AS("
         "  DELETE FROM " ++ RunningTable ++
-            " WHERE process_id = $4"
+            " WHERE process_id = $1"
             "  )"
-            "UPDATE " ++ TaskTable ++ " SET status = $1, response = $2, finished_time = $3 WHERE task_id = $5",
-        [Status, Response, unixtime_to_datetime(FinishedTime), ProcessId, TaskId]
+            "UPDATE " ++ TaskTable ++
+            " SET status = $2, response = $3, "
+            " running_time = $4, finished_time = $5 WHERE task_id = $6",
+        [ProcessId, Status, Response, unixtime_to_datetime(RunningTime1), unixtime_to_datetime(FinishedTime), TaskId]
     ),
     case Status of
         <<"error">> ->
@@ -1256,7 +1259,7 @@ marshal_trace(Trace) ->
             (<<"args">>, Args, Acc) -> Acc#{args => Args};
             (<<"metadata">>, Meta, Acc) -> Acc#{task_metadata => Meta};
             (<<"idempotency_key">>, Key, Acc) -> Acc#{idempotency_key => Key};
-            (<<"response">>, Response, Acc) -> Acc#{response => binary_to_term(Response)};
+            %(<<"response">>, Response, Acc) -> Acc#{response => binary_to_term(Response)};
             (<<"last_retry_interval">>, Interval, Acc) -> Acc#{retry_interval => Interval};
             (<<"attempts_count">>, Attempts, Acc) -> Acc#{retry_attempts => Attempts};
             (<<"event_id">>, EventId, Acc) -> Acc#{event_id => EventId};

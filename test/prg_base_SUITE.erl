@@ -287,9 +287,9 @@ simple_call_with_range_test(C) ->
 -spec call_replace_timer_test(_) -> _.
 call_replace_timer_test(C) ->
     %% steps:
-    %% 1. init ->    [event1], timer 2s + remove
-    %% 2. call ->    [],       timer 0s (new timer cancel remove)
-    %% 3. timeout -> [event2], undefined
+    %% 1. init ->    [event1],         timer 2s + remove
+    %% 2. call ->    [event2, event3], timer 0s (new timer cancel remove)
+    %% 3. timeout -> [event4],         undefined
     _ = mock_processor(call_replace_timer_test),
     Id = gen_id(),
     {ok, ok} = progressor:init(#{ns => ?NS(C), id => Id, args => <<"init_args">>}),
@@ -301,73 +301,71 @@ call_replace_timer_test(C) ->
         process_id := Id,
         status := <<"running">>,
         history := [
-            #{
-                event_id := 1,
-                metadata := #{<<"format_version">> := 1},
-                payload := _Pl1,
-                timestamp := _Ts1
-            },
-            #{
-                event_id := 2,
-                metadata := #{<<"format_version">> := 1},
-                payload := _Pl2,
-                timestamp := _Ts2
-            }
+            #{event_id := 1},
+            #{event_id := 2},
+            #{event_id := 3},
+            #{event_id := 4}
         ]
     }} = progressor:get(#{ns => ?NS(C), id => Id}),
     {ok, [
         #{
-            task_id := _,
             args := <<"init_args">>,
-            task_type := <<"init">>,
-            task_status := <<"finished">>,
-            task_metadata := #{<<"range">> := #{}},
-            retry_interval := 0,
-            retry_attempts := 0,
-            scheduled := _,
             running := _,
             finished := _,
-            response := {ok, ok},
-            event_id := 1,
-            event_timestamp := _,
-            event_metadata := #{<<"format_version">> := 1},
-            event_payload := _
+            events :=
+                [
+                    #{
+                        event_id := 1,
+                        event_timestamp := _,
+                        event_metadata := #{<<"format_version">> := 1},
+                        event_payload := _
+                    }
+                ],
+            task_id := _,
+            task_type := <<"init">>,
+            task_status := <<"finished">>,
+            scheduled := _,
+            retry_interval := 0,
+            retry_attempts := 0,
+            task_metadata := #{<<"range">> := #{}}
         },
         #{
+            args := <<"call_args">>,
+            running := _,
+            finished := _,
+            events :=
+                [
+                    #{event_id := 3},
+                    #{event_id := 2}
+                ],
+            task_id := _,
+            task_type := <<"call">>,
+            task_status := <<"finished">>,
+            scheduled := _,
+            retry_interval := 0,
+            retry_attempts := 0,
+            task_metadata := #{<<"range">> := #{}}
+        },
+        #{
+            running := _,
+            finished := _,
+            events :=
+                [#{event_id := 4}],
+            task_id := _,
+            task_type := <<"timeout">>,
+            task_status := <<"finished">>,
+            scheduled := _,
+            retry_interval := 0,
+            retry_attempts := 0
+        },
+        #{
+            events := [],
             task_id := _,
             task_type := <<"remove">>,
             task_status := <<"cancelled">>,
             scheduled := _,
             retry_interval := 0,
             retry_attempts := 0
-        },
-        #{
-            task_id := _,
-            args := <<"call_args">>,
-            task_type := <<"call">>,
-            task_status := <<"finished">>,
-            retry_interval := 0,
-            retry_attempts := 0,
-            task_metadata := #{<<"range">> := #{}},
-            scheduled := _,
-            running := _,
-            finished := _,
-            response := {ok, <<"response">>}
-        },
-        #{
-            task_id := _,
-            task_type := <<"timeout">>,
-            task_status := <<"finished">>,
-            retry_interval := 0,
-            retry_attempts := 0,
-            scheduled := _,
-            %% TODO need fix for running time!!!
-            finished := _,
-            response := {ok, ok},
-            event_id := 2,
-            event_timestamp := _,
-            event_metadata := #{<<"format_version">> := 1},
-            event_payload := _
         }
     ]} = progressor:trace(#{ns => ?NS(C), id => Id}),
     unmock_processor(),
@@ -1116,16 +1114,16 @@ mock_processor(call_replace_timer_test = TestCase) ->
             %% call when process suspended (wait timeout)
             Result = #{
                 response => <<"response">>,
-                events => [],
+                events => [event(2), event(3)],
                 action => #{set_timer => erlang:system_time(second)}
             },
             Self ! 2,
             {ok, Result};
         ({timeout, <<>>, #{history := History} = _Process}, _Opts, _Ctx) ->
             %% timeout after call processing (remove action was cancelled by call action)
-            ?assertEqual(1, erlang:length(History)),
+            ?assertEqual(3, erlang:length(History)),
             Result = #{
-                events => [event(2)]
+                events => [event(4)]
             },
             Self ! 3,
             {ok, Result}
