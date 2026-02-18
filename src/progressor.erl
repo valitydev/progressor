@@ -323,8 +323,54 @@ do_get(#{ns_opts := #{storage := StorageOpts}, id := Id, ns := NsId, range := Hi
 do_get(Req) ->
     do_get(Req#{range => #{}}).
 
+-define(EVENTS_KEYS, [event_id, event_timestamp, event_metadata, event_payload]).
+
 do_trace(#{ns_opts := #{storage := StorageOpts}, id := Id, ns := NsId}) ->
-    prg_storage:process_trace(StorageOpts, NsId, Id).
+    case prg_storage:process_trace(StorageOpts, NsId, Id) of
+        {ok, RawTrace} ->
+            TraceMap = lists:foldl(
+                fun update_trace/2,
+                #{},
+                RawTrace
+            ),
+            Trace = lists:map(fun({_Pos, Unit}) -> Unit end, lists:sort(maps:values(TraceMap))),
+            {ok, Trace};
+        Error ->
+            Error
+    end.
+
+update_trace(#{task_id := TaskId, event_id := _EventId} = RawTraceUnit, Acc) ->
+    maps:update_with(
+        TaskId,
+        fun(V) -> update_trace_unit(RawTraceUnit, V) end,
+        {
+            maps:size(Acc) + 1,
+            (maps:without(?EVENTS_KEYS, RawTraceUnit))#{
+                events => [maps:with(?EVENTS_KEYS, RawTraceUnit)]
+            }
+        },
+        Acc
+    );
+update_trace(#{task_id := TaskId} = _RawTraceUnit, Acc) when is_map_key(TaskId, Acc) ->
+    Acc;
+update_trace(#{task_id := TaskId} = RawTraceUnit, Acc) ->
+    Acc#{
+        TaskId => {maps:size(Acc) + 1, (maps:without(?EVENTS_KEYS, RawTraceUnit))#{events => []}}
+    }.
+
+update_trace_unit(RawTraceUnit, {Pos, TraceUnit}) ->
+    TraceUnitUpdated = maps:update_with(
+        events,
+        fun(ListEvents) ->
+            [
+                maps:with(?EVENTS_KEYS, RawTraceUnit)
+                | ListEvents
+            ]
+        end,
+        [maps:with(?EVENTS_KEYS, RawTraceUnit)],
+        TraceUnit
+    ),
+    {Pos, TraceUnitUpdated}.
 
 do_put(
     #{

@@ -226,7 +226,7 @@ handle_result_error(Result, {TaskType, _} = TaskHeader, Task, Deadline, State) w
 
 success_and_continue(Intent, TaskHeader, Task, Deadline, State) ->
     #{action := #{set_timer := Timestamp} = Action, events := Events} = Intent,
-    #{task_id := TaskId, context := Context} = Task,
+    #{context := Context} = Task,
     #prg_worker_state{
         ns_id = NsId,
         ns_opts = #{storage := StorageOpts} = NsOpts,
@@ -235,13 +235,8 @@ success_and_continue(Intent, TaskHeader, Task, Deadline, State) ->
     } = State,
     Now = erlang:system_time(second),
     {#{status := NewStatus} = ProcessUpdated, Updates} = update_process(Process, Intent),
-    Response = response(maps:get(response, Intent, undefined)),
-    TaskResult = #{
-        task_id => TaskId,
-        response => term_to_binary(Response),
-        finished_time => Now,
-        status => <<"finished">>
-    },
+    Response = response(Intent),
+    TaskResult = task_result(Task, <<"finished">>, Response),
     NewTask = #{
         process_id => ProcessId,
         task_type => action_to_task_type(Action),
@@ -287,7 +282,7 @@ success_and_remove(Intent, TaskHeader, _Task, Deadline, State) ->
         process = #{process_id := ProcessId} = _Process,
         sidecar_pid = Pid
     } = State,
-    Response = response(maps:get(response, Intent, undefined)),
+    Response = response(Intent),
     ok = prg_worker_sidecar:lifecycle_sink(Pid, Deadline, NsOpts, remove, ProcessId),
     ok = prg_worker_sidecar:remove_process(Pid, Deadline, StorageOpts, NsId, ProcessId),
     _ = maybe_reply(TaskHeader, Response),
@@ -296,7 +291,6 @@ success_and_remove(Intent, TaskHeader, _Task, Deadline, State) ->
 
 success_and_suspend(Intent, TaskHeader, Task, Deadline, State) ->
     #{events := Events, action := unset_timer} = Intent,
-    #{task_id := TaskId} = Task,
     #prg_worker_state{
         ns_id = NsId,
         ns_opts = #{storage := StorageOpts} = NsOpts,
@@ -308,13 +302,8 @@ success_and_suspend(Intent, TaskHeader, Task, Deadline, State) ->
         Pid, Deadline, NsOpts, lifecycle_event(TaskHeader, OldStatus, NewStatus), ProcessId
     ),
     ok = prg_worker_sidecar:event_sink(Pid, Deadline, NsOpts, ProcessId, Events),
-    Response = response(maps:get(response, Intent, undefined)),
-    TaskResult = #{
-        task_id => TaskId,
-        response => term_to_binary(Response),
-        finished_time => erlang:system_time(second),
-        status => <<"finished">>
-    },
+    Response = response(Intent),
+    TaskResult = task_result(Task, <<"finished">>, Response),
     SaveResult = prg_worker_sidecar:complete_and_suspend(
         Pid,
         Deadline,
@@ -346,7 +335,6 @@ success_and_unlock(
 ) ->
     %% machinegun legacy behaviour
     #{events := Events} = Intent,
-    #{task_id := TaskId} = Task,
     #prg_worker_state{
         ns_id = NsId,
         ns_opts = #{storage := StorageOpts} = NsOpts,
@@ -359,13 +347,8 @@ success_and_unlock(
     ),
     ok = prg_worker_sidecar:event_sink(Pid, Deadline, NsOpts, ProcessId, Events),
     {ProcessUpdated, Updates} = update_process(Process, Intent),
-    Response = response(maps:get(response, Intent, undefined)),
-    TaskResult = #{
-        task_id => TaskId,
-        response => term_to_binary(Response),
-        finished_time => erlang:system_time(second),
-        status => <<"finished">>
-    },
+    Response = response(Intent),
+    TaskResult = task_result(Task, <<"finished">>, Response),
     {ok, ErrorTask} = prg_worker_sidecar:get_task(Pid, Deadline, StorageOpts, NsId, ErrorTaskId),
     case ErrorTask of
         #{task_type := Type} when Type =:= <<"timeout">>; Type =:= <<"remove">> ->
@@ -410,7 +393,6 @@ success_and_unlock(
     end;
 success_and_unlock(Intent, TaskHeader, Task, Deadline, State) ->
     #{events := Events} = Intent,
-    #{task_id := TaskId} = Task,
     #prg_worker_state{
         ns_id = NsId,
         ns_opts = #{storage := StorageOpts} = NsOpts,
@@ -423,13 +405,8 @@ success_and_unlock(Intent, TaskHeader, Task, Deadline, State) ->
         Pid, Deadline, NsOpts, lifecycle_event(TaskHeader, OldStatus, NewStatus), ProcessId
     ),
     ok = prg_worker_sidecar:event_sink(Pid, Deadline, NsOpts, ProcessId, Events),
-    Response = response(maps:get(response, Intent, undefined)),
-    TaskResult = #{
-        task_id => TaskId,
-        response => term_to_binary(Response),
-        finished_time => erlang:system_time(second),
-        status => <<"finished">>
-    },
+    Response = response(Intent),
+    TaskResult = task_result(Task, <<"finished">>, Response),
     SaveResult = prg_worker_sidecar:complete_and_unlock(
         Pid,
         Deadline,
@@ -459,7 +436,6 @@ success_and_unlock(Intent, TaskHeader, Task, Deadline, State) ->
 
 error_and_stop({error, Reason} = Response, TaskHeader, Task, Deadline, State) ->
     {TaskType, _} = TaskHeader,
-    #{task_id := TaskId} = Task,
     #prg_worker_state{
         ns_id = NsId,
         ns_opts = #{storage := StorageOpts} = NsOpts,
@@ -477,12 +453,7 @@ error_and_stop({error, Reason} = Response, TaskHeader, Task, Deadline, State) ->
                 ),
                 update_process(Process, {error, {Detail, undefined}})
         end,
-    TaskResult = #{
-        task_id => TaskId,
-        response => term_to_binary(Response),
-        finished_time => erlang:system_time(second),
-        status => <<"error">>
-    },
+    TaskResult = task_result(Task, <<"error">>, Response),
     ok = prg_worker_sidecar:complete_and_error(
         Pid, Deadline, StorageOpts, NsId, TaskResult, Updates
     ),
@@ -623,18 +594,27 @@ update_process_from_intent(Process, ProcessUpdates, Intent) ->
         Intent
     ).
 
+task_result(#{task_id := TaskId, running_time := RunningTime}, Status, Response) ->
+    #{
+        task_id => TaskId,
+        response => term_to_binary(Response),
+        running_time => RunningTime,
+        finished_time => erlang:system_time(second),
+        status => Status
+    }.
+
 -spec maybe_reply(task_header(), term()) -> term().
 maybe_reply({_, undefined}, _) ->
     undefined;
 maybe_reply({_, {Receiver, Ref}}, Response) ->
     progressor:reply(Receiver, {Ref, Response}).
 
-response({error, _} = Error) ->
+response(#{response := {error, _} = Error}) ->
     Error;
-response(undefined) ->
-    {ok, ok};
-response(Data) ->
-    {ok, Data}.
+response(#{response := Data}) ->
+    {ok, Data};
+response(Intent) when not is_map_key(response, Intent) ->
+    {ok, ok}.
 
 extract_task_type({TaskType, _}) ->
     TaskType.
