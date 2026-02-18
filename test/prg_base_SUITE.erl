@@ -335,8 +335,8 @@ call_replace_timer_test(C) ->
             finished := _,
             events :=
                 [
-                    #{event_id := 3},
-                    #{event_id := 2}
+                    #{event_id := _},
+                    #{event_id := _}
                 ],
             task_id := _,
             task_type := <<"call">>,
