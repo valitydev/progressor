@@ -1258,8 +1258,9 @@ marshal_trace(Trace) ->
             (<<"finished_time">>, FinishedTs, Acc) -> Acc#{finished => FinishedTs};
             (<<"args">>, Args, Acc) -> Acc#{args => Args};
             (<<"metadata">>, Meta, Acc) -> Acc#{task_metadata => Meta};
+            (<<"context">>, Context, Acc) -> Acc#{context => Context};
             (<<"idempotency_key">>, Key, Acc) -> Acc#{idempotency_key => Key};
-            %(<<"response">>, Response, Acc) -> Acc#{response => binary_to_term(Response)};
+            (<<"response">>, Response, Acc) -> Acc#{response => binary_to_term(Response)};
             (<<"last_retry_interval">>, Interval, Acc) -> Acc#{retry_interval => Interval};
             (<<"attempts_count">>, Attempts, Acc) -> Acc#{retry_attempts => Attempts};
             (<<"event_id">>, EventId, Acc) -> Acc#{event_id => EventId};

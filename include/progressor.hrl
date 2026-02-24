@@ -64,6 +64,7 @@
     finished => timestamp_sec(),
     args => binary(),
     metadata => map(),
+    context => binary(),
     idempotency_key => binary(),
     response => term(),
     retry_interval => non_neg_integer(),
