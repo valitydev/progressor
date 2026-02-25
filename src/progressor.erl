@@ -1,7 +1,6 @@
 -module(progressor).
 
 -include("progressor.hrl").
--include("otel.hrl").
 
 -define(TASK_REPEAT_REQUEST_TIMEOUT, 1000).
 -define(PREPARING_KEY, progressor_request_preparing_duration_ms).
@@ -30,7 +29,6 @@
     id := id(),
     args => term(),
     idempotency_key => binary(),
-    otel_ctx => otel_ctx:t(),
     context => binary(),
     range => history_range(),
     options => map(),
@@ -50,7 +48,7 @@ init(Req) ->
             fun add_ns_opts/1,
             fun check_idempotency/1,
             fun add_task/1,
-            fun(Data) -> prepare(fun prg_storage:prepare_init/4, Data) end,
+            fun(Data) -> prepare(?FUNCTION_NAME, fun prg_storage:prepare_init/4, Data) end,
             fun process_call/1
         ],
         Req#{type => init}
@@ -64,7 +62,7 @@ call(Req) ->
             fun check_idempotency/1,
             fun(Data) -> check_process_status(Data, <<"running">>) end,
             fun add_task/1,
-            fun(Data) -> prepare(fun prg_storage:prepare_call/4, Data) end,
+            fun(Data) -> prepare(?FUNCTION_NAME, fun prg_storage:prepare_call/4, Data) end,
             fun process_call/1
         ],
         Req#{type => call}
@@ -78,7 +76,7 @@ repair(Req) ->
             fun check_idempotency/1,
             fun(Data) -> check_process_status(Data, <<"error">>) end,
             fun add_task/1,
-            fun(Data) -> prepare(fun prg_storage:prepare_repair/4, Data) end,
+            fun(Data) -> prepare(?FUNCTION_NAME, fun prg_storage:prepare_repair/4, Data) end,
             fun process_call/1
         ],
         Req#{type => repair}
@@ -91,7 +89,7 @@ simple_repair(Req) ->
             fun add_ns_opts/1,
             fun check_idempotency/1,
             fun check_process_continuation/1,
-            fun(Data) -> prepare_postponed(fun prg_storage:prepare_call/4, Data) end,
+            fun(Data) -> prepare_postponed(?FUNCTION_NAME, fun prg_storage:prepare_call/4, Data) end,
             fun do_simple_repair/1
         ],
         Req
@@ -229,11 +227,14 @@ do_simple_repair(#{task := _}) ->
     %% process will repaired via timeout task
     {ok, ok};
 do_simple_repair(#{ns_opts := #{storage := StorageOpts} = NsOpts, id := Id, ns := NsId}) ->
-    ok = prg_storage:repair_process(StorageOpts, NsId, Id),
-    ok = prg_notifier:lifecycle_sink(NsOpts, repair, Id),
+    prg_utils:with_span(#{name => <<"simple repair">>, kind => client}, fun(_SpanCtx) ->
+        ok = prg_storage:repair_process(StorageOpts, NsId, Id),
+        ok = prg_notifier:lifecycle_sink(NsOpts, repair, Id)
+    end),
     {ok, ok}.
 
 prepare(
+    Name,
     Fun,
     #{ns_opts := #{storage := StorageOpts} = NsOpts, ns := NsId, id := ProcessId, task := Task} =
         Req
@@ -244,7 +245,8 @@ prepare(
     PrepareResult = prg_utils:with_observe(
         fun() -> Fun(StorageOpts, NsId, ProcessId, Task#{status => TaskStatus}) end,
         ?PREPARING_KEY,
-        [erlang:atom_to_binary(NsId, utf8), TaskType]
+        [erlang:atom_to_binary(NsId, utf8), TaskType],
+        #{name => iolist_to_binary(["prepare ", atom_to_binary(Name)]), kind => client}
     ),
     case PrepareResult of
         {ok, {continue, TaskId}} ->
@@ -265,6 +267,7 @@ prepare(
     end.
 
 prepare_postponed(
+    Name,
     Fun,
     #{ns_opts := #{storage := StorageOpts}, ns := NsId, id := ProcessId, task := Task} = Req
 ) ->
@@ -272,7 +275,8 @@ prepare_postponed(
     PrepareResult = prg_utils:with_observe(
         fun() -> Fun(StorageOpts, NsId, ProcessId, Task#{status => <<"waiting">>}) end,
         ?PREPARING_KEY,
-        [erlang:atom_to_binary(NsId, utf8), TaskType]
+        [erlang:atom_to_binary(NsId, utf8), TaskType],
+        #{name => atom_to_binary(Name), kind => client}
     ),
     case PrepareResult of
         {ok, {postpone, TaskId}} ->
@@ -280,7 +284,7 @@ prepare_postponed(
         {error, _} = Error ->
             Error
     end;
-prepare_postponed(_Fun, Req) ->
+prepare_postponed(_Name, _Fun, Req) ->
     %% Req without task, skip this step
     Req.
 
@@ -370,18 +374,24 @@ process_call(#{ns_opts := NsOpts, ns := NsId, type := Type, task := Task, worker
     Timeout = TimeoutSec * 1000,
     Ref = make_ref(),
     TaskHeader = make_task_header(Type, Ref),
-    ok = prg_worker:process_task(Worker, TaskHeader, Task),
-    ok = prg_scheduler:release_worker(NsId, self(), Worker),
-    %% TODO Maybe refactor to span inside scheduler gen_server
-    _ = ?span_event(<<"release worker">>),
-    %% see fun reply/2
-    receive
-        {Ref, Result} ->
-            Result
-    after Timeout ->
-        _ = ?span_exception(throw, <<"timeout">>, []),
-        {error, <<"timeout">>}
-    end.
+    Attributes = #{
+        <<"process.type">> => atom_to_binary(Type),
+        <<"process.id">> => maps:get(process_id, Task),
+        <<"process.namespace">> => NsId,
+        <<"process.task_id">> => maps:get(task_id, Task, undefined)
+    },
+    prg_utils:with_span(#{name => atom_to_binary(Type), kind => client, attributes => Attributes}, fun(SpanCtx) ->
+        ok = prg_worker:process_task(Worker, TaskHeader, Task),
+        ok = prg_scheduler:release_worker(NsId, self(), Worker),
+        %% see fun reply/2
+        receive
+            {Ref, Result} ->
+                Result
+        after Timeout ->
+            _ = otel_span:add_event(SpanCtx, <<"timeout">>, #{}),
+            {error, <<"timeout">>}
+        end
+    end).
 
 make_task_header(init, Ref) ->
     {init, {self(), Ref}};

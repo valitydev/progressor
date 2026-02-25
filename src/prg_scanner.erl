@@ -161,7 +161,7 @@ search_timers(
                 []
         end
     end,
-    prg_utils:with_observe(Fun, ?TIMERS_SCAN_KEY, [erlang:atom_to_binary(NsId, utf8)]).
+    prg_utils:with_observe(Fun, ?TIMERS_SCAN_KEY, [erlang:atom_to_binary(NsId, utf8)], undefined).
 
 search_calls(
     FreeWorkersCount,
@@ -181,7 +181,7 @@ search_calls(
                 []
         end
     end,
-    prg_utils:with_observe(Fun, ?CALLS_SCAN_KEY, [erlang:atom_to_binary(NsId, utf8)]).
+    prg_utils:with_observe(Fun, ?CALLS_SCAN_KEY, [erlang:atom_to_binary(NsId, utf8)], undefined).
 
 collect_zombie(
     NsId,
@@ -200,7 +200,7 @@ collect_zombie(
         end,
         ok
     end,
-    prg_utils:with_observe(Fun, ?ZOMBIE_COLLECTION_KEY, [erlang:atom_to_binary(NsId, utf8)]).
+    prg_utils:with_observe(Fun, ?ZOMBIE_COLLECTION_KEY, [erlang:atom_to_binary(NsId, utf8)], undefined).
 
 header(Type) ->
     {erlang:binary_to_atom(Type), undefined}.
