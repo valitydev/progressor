@@ -10,6 +10,8 @@
 -export([unixtime_to_datetime/1]).
 -export([with_observe/3]).
 -export([with_observe/4]).
+-export([to_microseconds/1]).
+-export([to_seconds/1]).
 
 -spec registered_name(atom(), string()) -> atom().
 registered_name(BaseAtom, PostfixStr) ->
@@ -63,3 +65,35 @@ collect(histogram, MetricKey, Labels, Value) ->
 %%collect(_, _MetricKey, _Labels, _Value) ->
 %%    %% TODO implement it
 %%    ok.
+
+-spec to_microseconds(non_neg_integer()) -> non_neg_integer() | no_return().
+to_microseconds(Timestamp) ->
+    if
+        Timestamp < 100000000000 ->
+            %% seconds
+            Timestamp * 1000000;
+        Timestamp < 100000000000000 ->
+            %% milliseconds
+            Timestamp * 1000;
+        Timestamp < 100000000000000000 ->
+            %% microseconds
+            Timestamp;
+        true ->
+            error({unsupported_time_unit, Timestamp})
+    end.
+
+-spec to_seconds(non_neg_integer()) -> non_neg_integer() | no_return().
+to_seconds(Timestamp) ->
+    if
+        Timestamp < 100000000000 ->
+            %% seconds
+            Timestamp;
+        Timestamp < 100000000000000 ->
+            %% milliseconds
+            Timestamp div 1000;
+        Timestamp < 100000000000000000 ->
+            %% microseconds
+            Timestamp div 1000000;
+        true ->
+            error({unsupported_time_unit, Timestamp})
+    end.

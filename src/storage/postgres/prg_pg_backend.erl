@@ -261,9 +261,9 @@ collect_zombies(PgOpts, NsId, Timeout) ->
         schedule := ScheduleTable,
         running := RunningTable
     } = prg_pg_utils:tables(NsId),
-    NowSec = erlang:system_time(second),
-    Now = unixtime_to_datetime(NowSec),
-    TsBackward = unixtime_to_datetime(NowSec - (Timeout + ?PROTECT_TIMEOUT)),
+    NowMicroSec = erlang:system_time(microsecond),
+    Now = unixtime_to_datetime(NowMicroSec),
+    TsBackward = unixtime_to_datetime(NowMicroSec - ((Timeout + ?PROTECT_TIMEOUT) * 1000000)),
     {ok, _, _} = epg_pool:transaction(
         Pool,
         fun(Connection) ->
@@ -300,9 +300,9 @@ search_timers(PgOpts, NsId, _Timeout, Limit) ->
         schedule := ScheduleTable,
         running := RunningTable
     } = prg_pg_utils:tables(NsId),
-    NowSec = erlang:system_time(second),
-    Now = unixtime_to_datetime(NowSec),
-    NowText = unixtime_to_text(NowSec),
+    NowMicroSec = erlang:system_time(microsecond),
+    Now = unixtime_to_datetime(NowMicroSec),
+    NowText = unixtime_to_text(NowMicroSec),
     {ok, _, Columns, Rows} =
         _Res = epg_pool:transaction(
             Pool,
@@ -320,7 +320,7 @@ search_timers(PgOpts, NsId, _Timeout, Limit) ->
                         "      ORDER BY scheduled_time ASC LIMIT $3)"
                         "    RETURNING"
                         "      task_id, process_id, task_type, 'running'::task_status as status, scheduled_time, "
-                        "      TO_TIMESTAMP($2, 'YYYY-MM-DD HH24:MI:SS') as running_time, args, metadata, "
+                        "      TO_TIMESTAMP($2, 'YYYY-MM-DD HH24:MI:SS.US') as running_time, args, metadata, "
                         "      last_retry_interval, attempts_count, context"
                         "  ) "
                         "INSERT INTO " ++ RunningTable ++
@@ -340,8 +340,8 @@ capture_task(PgOpts, NsId, TaskId) ->
         schedule := ScheduleTable,
         running := RunningTable
     } = prg_pg_utils:tables(NsId),
-    NowSec = erlang:system_time(second),
-    NowText = unixtime_to_text(NowSec),
+    NowMicroSec = erlang:system_time(microsecond),
+    NowText = unixtime_to_text(NowMicroSec),
     {ok, Columns, Rows} =
         _Res = epg_pool:transaction(
             Pool,
@@ -355,7 +355,7 @@ capture_task(PgOpts, NsId, TaskId) ->
                         " WHERE task_id = $2 AND status = 'waiting' "
                         "    RETURNING"
                         "      task_id, process_id, task_type, 'running'::task_status as status, scheduled_time, "
-                        "      TO_TIMESTAMP($1, 'YYYY-MM-DD HH24:MI:SS') as running_time, args, metadata, "
+                        "      TO_TIMESTAMP($1, 'YYYY-MM-DD HH24:MI:SS.US') as running_time, args, metadata, "
                         "      last_retry_interval, attempts_count, context"
                         "), "
                         "inserted_to_running AS ("
@@ -378,8 +378,8 @@ search_calls(PgOpts, NsId, Limit) ->
         schedule := ScheduleTable,
         running := RunningTable
     } = prg_pg_utils:tables(NsId),
-    NowSec = erlang:system_time(second),
-    Now = unixtime_to_text(NowSec),
+    NowMicroSec = erlang:system_time(microsecond),
+    Now = unixtime_to_text(NowMicroSec),
     {ok, _, Columns, Rows} = epg_pool:transaction(
         Pool,
         fun(Connection) ->
@@ -395,7 +395,7 @@ search_calls(PgOpts, NsId, Limit) ->
                     "      GROUP BY process_id ORDER BY min ASC LIMIT $2"
                     "    ) "
                     "    RETURNING task_id, process_id, task_type, 'running'::task_status as status, scheduled_time, "
-                    "      TO_TIMESTAMP($1, 'YYYY-MM-DD HH24:MI:SS') as running_time, args, metadata, "
+                    "      TO_TIMESTAMP($1, 'YYYY-MM-DD HH24:MI:SS.US') as running_time, args, metadata, "
                     "      last_retry_interval, attempts_count, context"
                     "  ) "
                     "INSERT INTO " ++ RunningTable ++
@@ -556,7 +556,7 @@ complete_and_continue(PgOpts, NsId, TaskResult, ProcessUpdates, Events, NextTask
                             do_save_running(
                                 Connection,
                                 RunningTable,
-                                NextTask#{task_id => NextTaskId, running_time => erlang:system_time(second)},
+                                NextTask#{task_id => NextTaskId, running_time => erlang:system_time(microsecond)},
                                 " * "
                             );
                         #{status := <<"waiting">>} ->
@@ -765,7 +765,7 @@ do_save_process(Connection, Table, Process) ->
     Detail = maps:get(detail, Process, null),
     AuxState = maps:get(aux_state, Process, null),
     Meta = maps:get(metadata, Process, null),
-    CreatedAtTs = maps:get(created_at, Process, erlang:system_time(second)),
+    CreatedAtTs = maps:get(created_at, Process, erlang:system_time(microsecond)),
     CreatedAt = unixtime_to_datetime(CreatedAtTs),
     PreviousStatus = maps:get(previous_status, Process, Status),
     StatusChangedAt = unixtime_to_datetime(maps:get(status_changed_at, Process, CreatedAtTs)),
@@ -846,7 +846,7 @@ do_save_running(Connection, Table, Task, Returning) ->
     } = Task,
     Args = maps:get(args, Task, null),
     MetaData = maps:get(metadata, Task, null),
-    RunningTs = erlang:system_time(second),
+    RunningTs = erlang:system_time(microsecond),
     Context = maps:get(context, Task, <<>>),
     epg_pool:query(
         Connection,
@@ -1002,7 +1002,7 @@ do_complete_task(Connection, TaskTable, ScheduleTable, RunningTable, TaskResult)
     } = TaskResult,
     Response = maps:get(response, TaskResult, null),
     RunningTime1 = maps:get(running_time, TaskResult, null),
-    FinishedTime = maps:get(finished_time, TaskResult, erlang:system_time(second)),
+    FinishedTime = maps:get(finished_time, TaskResult, erlang:system_time(microsecond)),
     {ok, _} = epg_pool:query(
         Connection,
         "WITH deleted AS("
@@ -1020,7 +1020,7 @@ do_complete_task(Connection, TaskTable, ScheduleTable, RunningTable, TaskResult)
             {ok, 0, [], []};
         _ ->
             %% search waiting call
-            RunningTime = unixtime_to_text(erlang:system_time(second)),
+            RunningTime = unixtime_to_text(erlang:system_time(microsecond)),
             epg_pool:query(
                 Connection,
                 "WITH postponed_tasks AS ("
@@ -1029,7 +1029,7 @@ do_complete_task(Connection, TaskTable, ScheduleTable, RunningTable, TaskResult)
                     "    (SELECT min(task_id) FROM " ++ ScheduleTable ++
                     "      WHERE process_id = $1 AND status = 'waiting' AND task_type IN ('call', 'repair')) "
                     "    RETURNING task_id, process_id, task_type, 'running'::task_status as status, scheduled_time, "
-                    "      TO_TIMESTAMP($2, 'YYYY-MM-DD HH24:MI:SS') as running_time, args, metadata, "
+                    "      TO_TIMESTAMP($2, 'YYYY-MM-DD HH24:MI:SS.US') as running_time, args, metadata, "
                     "      last_retry_interval, attempts_count, context"
                     "  ) "
                     "INSERT INTO " ++ RunningTable ++
@@ -1054,9 +1054,9 @@ do_block_timer(Connection, ScheduleTable, ProcessId) ->
     end.
 
 do_unlock_timer(Connection, ScheduleTable, RunningTable, ProcessId) ->
-    NowSec = erlang:system_time(second),
-    Now = unixtime_to_datetime(NowSec),
-    NowText = unixtime_to_text(NowSec),
+    NowMicroSec = erlang:system_time(microsecond),
+    Now = unixtime_to_datetime(NowMicroSec),
+    NowText = unixtime_to_text(NowMicroSec),
     epg_pool:query(
         Connection,
         "WITH unblocked_task AS (UPDATE" ++ ScheduleTable ++
@@ -1068,7 +1068,7 @@ do_unlock_timer(Connection, ScheduleTable, RunningTable, ProcessId) ->
             "  WHERE process_id = $1 AND status = 'blocked' AND scheduled_time <= $2"
             "    RETURNING"
             "      task_id, process_id, task_type, 'running'::task_status as status, scheduled_time, "
-            "      TO_TIMESTAMP($3, 'YYYY-MM-DD HH24:MI:SS') as running_time, args, metadata, "
+            "      TO_TIMESTAMP($3, 'YYYY-MM-DD HH24:MI:SS.US') as running_time, args, metadata, "
             "      last_retry_interval, attempts_count, context"
             "), "
             "running_task AS ("
@@ -1144,20 +1144,27 @@ convert(json, Value) ->
 convert(_Type, Value) ->
     Value.
 
-daytime_to_unixtime({Date, {Hour, Minute, Second}}) when is_float(Second) ->
-    daytime_to_unixtime({Date, {Hour, Minute, trunc(Second)}});
-daytime_to_unixtime(Daytime) ->
-    to_unixtime(calendar:datetime_to_gregorian_seconds(Daytime)).
+daytime_to_unixtime({Date, {Hour, Minute, SecondWithMicro}}) ->
+    MicroPart = trunc(SecondWithMicro * 1000000) rem 1000000,
+    GregorianSeconds = calendar:datetime_to_gregorian_seconds({Date, {Hour, Minute, trunc(SecondWithMicro)}}),
+    (GregorianSeconds - ?EPOCH_DIFF) * 1000000 + MicroPart.
+%    to_unixtime(calendar:datetime_to_gregorian_seconds({Date, {Hour, Minute, trunc(SecondWithMicro)}}))
+%    daytime_to_unixtime({Date, {Hour, Minute, trunc(Second)}});
+%daytime_to_unixtime(Daytime) ->
+%    to_unixtime(calendar:datetime_to_gregorian_seconds(Daytime)).
 
-to_unixtime(Time) when is_integer(Time) ->
-    Time - ?EPOCH_DIFF.
+%to_unixtime(Time) when is_integer(Time) ->
+%    Time - ?EPOCH_DIFF.
 
 unixtime_to_datetime(null) ->
     null;
-unixtime_to_datetime(TimestampSec) ->
-    calendar:gregorian_seconds_to_datetime(TimestampSec + ?EPOCH_DIFF).
+unixtime_to_datetime(Timestamp) ->
+    {TimestampSec, Fractional} = parse_timestamp(Timestamp),
+    {Date, {Hour, Minute, Second}} = calendar:gregorian_seconds_to_datetime(TimestampSec + ?EPOCH_DIFF),
+    {Date, {Hour, Minute, Second + Fractional}}.
 
-unixtime_to_text(TimestampSec) ->
+unixtime_to_text(Timestamp) ->
+    {TimestampSec, MicroSec} = parse_timestamp(Timestamp, integer),
     {
         {Year, Month, Day},
         {Hour, Minute, Seconds}
@@ -1170,16 +1177,68 @@ unixtime_to_text(TimestampSec) ->
         (maybe_add_zero(Day))/binary,
         " ",
         (maybe_add_zero(Hour))/binary,
-        "-",
+        ":",
         (maybe_add_zero(Minute))/binary,
-        "-",
-        (maybe_add_zero(Seconds))/binary
+        ":",
+        (maybe_add_zero(Seconds))/binary,
+        ".",
+        (microsecond_part(MicroSec))/binary
     >>.
 
 maybe_add_zero(Val) when Val < 10 ->
     <<"0", (integer_to_binary(Val))/binary>>;
 maybe_add_zero(Val) ->
     integer_to_binary(Val).
+
+microsecond_part(0) ->
+    <<"0">>;
+microsecond_part(Val) when Val < 10 ->
+    <<"00000", (integer_to_binary(Val))/binary>>;
+microsecond_part(Val) when Val < 100 ->
+    <<"0000", (integer_to_binary(Val))/binary>>;
+microsecond_part(Val) when Val < 1000 ->
+    <<"000", (integer_to_binary(Val))/binary>>;
+microsecond_part(Val) when Val < 10000 ->
+    <<"00", (integer_to_binary(Val))/binary>>;
+microsecond_part(Val) when Val < 100000 ->
+    <<"0", (integer_to_binary(Val))/binary>>;
+microsecond_part(Val) ->
+    <<(integer_to_binary(Val))/binary>>.
+
+-spec parse_timestamp(Timestamp :: integer()) -> {timestamp_sec(), float() | integer()}.
+parse_timestamp(Timestamp) ->
+    parse_timestamp(Timestamp, fractional).
+
+parse_timestamp(Timestamp, Opts) ->
+    if
+        Timestamp < 100000000000 ->
+            %% seconds
+            {Timestamp, 0};
+        Timestamp < 100000000000000 ->
+            %% milliseconds
+            TimestampSec = Timestamp div 1000,
+            {TimestampSec, remainder_timestamp(Opts, 1000, Timestamp)};
+        Timestamp < 100000000000000000 ->
+            %% microseconds
+            TimestampSec = Timestamp div 1000000,
+            {TimestampSec, remainder_timestamp(Opts, 1000000, Timestamp)};
+        true ->
+            error({unsupported_time_unit, Timestamp})
+    end.
+
+remainder_timestamp(fractional, Ratio, Timestamp) ->
+    %% 1 millisec -> 0.001 sec
+    %% 1 microsec -> 0.000001 sec
+    (Timestamp rem Ratio) / Ratio;
+remainder_timestamp(integer, Ratio, Timestamp) ->
+    case Ratio of
+        1000000 ->
+            %% microseconds as is
+            Timestamp rem 1000000;
+        1000 ->
+            %% milliseconds to microseconds
+            (Timestamp rem 1000) * 1000
+    end.
 
 json_encode(null) ->
     null;
@@ -1237,7 +1296,8 @@ marshal_event(Event) ->
             (<<"process_id">>, ProcessId, Acc) -> Acc#{process_id => ProcessId};
             (<<"task_id">>, TaskId, Acc) -> Acc#{task_id => TaskId};
             (<<"event_id">>, EventId, Acc) -> Acc#{event_id => EventId};
-            (<<"timestamp">>, Ts, Acc) -> Acc#{timestamp => Ts};
+            %% TODO: to micro after processors?
+            (<<"timestamp">>, Ts, Acc) -> Acc#{timestamp => prg_utils:to_seconds(Ts)};
             (<<"metadata">>, MetaData, Acc) -> Acc#{metadata => MetaData};
             (<<"payload">>, Payload, Acc) -> Acc#{payload => Payload};
             (_, _, Acc) -> Acc
@@ -1253,9 +1313,9 @@ marshal_trace(Trace) ->
             (<<"task_id">>, TaskId, Acc) -> Acc#{task_id => TaskId};
             (<<"task_type">>, TaskType, Acc) -> Acc#{task_type => TaskType};
             (<<"status">>, TaskStatus, Acc) -> Acc#{task_status => TaskStatus};
-            (<<"scheduled_time">>, ScheduledTs, Acc) -> Acc#{scheduled => ScheduledTs};
-            (<<"running_time">>, RunningTs, Acc) -> Acc#{running => RunningTs};
-            (<<"finished_time">>, FinishedTs, Acc) -> Acc#{finished => FinishedTs};
+            (<<"scheduled_time">>, ScheduledTs, Acc) -> Acc#{scheduled => prg_utils:to_microseconds(ScheduledTs)};
+            (<<"running_time">>, RunningTs, Acc) -> Acc#{running => prg_utils:to_microseconds(RunningTs)};
+            (<<"finished_time">>, FinishedTs, Acc) -> Acc#{finished => prg_utils:to_microseconds(FinishedTs)};
             (<<"args">>, Args, Acc) -> Acc#{args => Args};
             (<<"metadata">>, Meta, Acc) -> Acc#{task_metadata => Meta};
             (<<"context">>, Context, Acc) -> Acc#{context => Context};
@@ -1264,7 +1324,8 @@ marshal_trace(Trace) ->
             (<<"last_retry_interval">>, Interval, Acc) -> Acc#{retry_interval => Interval};
             (<<"attempts_count">>, Attempts, Acc) -> Acc#{retry_attempts => Attempts};
             (<<"event_id">>, EventId, Acc) -> Acc#{event_id => EventId};
-            (<<"event_timestamp">>, Ts, Acc) -> Acc#{event_timestamp => Ts};
+            %% TODO: to micro after processors?
+            (<<"event_timestamp">>, Ts, Acc) -> Acc#{event_timestamp => prg_utils:to_seconds(Ts)};
             (<<"event_metadata">>, Meta, Acc) -> Acc#{event_metadata => Meta};
             (<<"event_payload">>, Payload, Acc) -> Acc#{event_payload => Payload};
             (_, _, Acc) -> Acc

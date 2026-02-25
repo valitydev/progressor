@@ -25,7 +25,7 @@
     last_event_id => event_id(),
     initialization => task_id(),
     previous_status => process_status(),
-    status_changed_at => timestamp_sec()
+    status_changed_at => timestamp_us()
 }.
 
 -type task() :: #{
@@ -33,9 +33,9 @@
     process_id := id(),
     task_type := task_type(),
     status := task_status(),
-    scheduled_time := timestamp_sec(),
-    running_time => timestamp_sec(),
-    finished_time => timestamp_sec(),
+    scheduled_time := timestamp_us(),
+    running_time => timestamp_us(),
+    finished_time => timestamp_us(),
     args => binary(),
     metadata => map(),
     idempotency_key => binary(),
@@ -59,9 +59,9 @@
     task_id := task_id(),
     task_type := task_type(),
     task_status := task_status(),
-    scheduled := timestamp_sec(),
-    running => timestamp_sec(),
-    finished => timestamp_sec(),
+    scheduled := timestamp_us(),
+    running => timestamp_us(),
+    finished => timestamp_us(),
     args => binary(),
     metadata => map(),
     context => binary(),
@@ -196,6 +196,8 @@
     response => binary()
 }.
 
+%% microsecond
+-type timestamp_us() :: non_neg_integer().
 -type timestamp_ms() :: non_neg_integer().
 -type timestamp_sec() :: non_neg_integer().
 -type timeout_sec() :: non_neg_integer().
@@ -223,6 +225,6 @@
     process_id => ProcessId,
     status => <<"init">>,
     previous_status => <<"init">>,
-    created_at => erlang:system_time(second),
-    status_changed_at => erlang:system_time(second)
+    created_at => erlang:system_time(microsecond),
+    status_changed_at => erlang:system_time(microsecond)
 }).

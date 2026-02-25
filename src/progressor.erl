@@ -385,7 +385,7 @@ do_put(
     } = Process,
     Action = maps:get(action, Args, undefined),
     Context = maps:get(context, Opts, <<>>),
-    Now = erlang:system_time(second),
+    Now = erlang:system_time(microsecond),
     InitTask = #{
         process_id => ProcessId,
         task_type => <<"init">>,
@@ -466,7 +466,7 @@ make_task(#{task_type := TaskType} = TaskData) when
     TaskType =:= <<"call">>;
     TaskType =:= <<"repair">>
 ->
-    Now = erlang:system_time(second),
+    Now = erlang:system_time(microsecond),
     Defaults = #{
         status => <<"running">>,
         scheduled_time => Now,
@@ -476,7 +476,7 @@ make_task(#{task_type := TaskType} = TaskData) when
     },
     maps:merge(Defaults, TaskData);
 make_task(#{task_type := <<"timeout">>} = TaskData) ->
-    Now = erlang:system_time(second),
+    Now = erlang:system_time(microsecond),
     Defaults = #{
         %% TODO
         metadata => #{<<"kind">> => <<"simple_repair">>},
@@ -487,7 +487,7 @@ make_task(#{task_type := <<"timeout">>} = TaskData) ->
     },
     maps:merge(Defaults, TaskData);
 make_task(#{task_type := <<"notify">>} = TaskData) ->
-    Now = erlang:system_time(second),
+    Now = erlang:system_time(microsecond),
     Defaults = #{
         status => <<"running">>,
         scheduled_time => Now,
@@ -530,7 +530,7 @@ action_to_task(#{set_timer := Timestamp} = Action, ProcessId, Context) ->
         status => <<"waiting">>,
         args => <<>>,
         context => Context,
-        scheduled_time => Timestamp,
+        scheduled_time => prg_utils:to_microseconds(Timestamp),
         last_retry_interval => 0,
         attempts_count => 0
     }.
