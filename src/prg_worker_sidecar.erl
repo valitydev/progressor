@@ -51,9 +51,12 @@
 process(Pid, Deadline, #{namespace := NS} = NsOpts, {TaskType, _, _} = Request, Context) ->
     Timeout = Deadline - erlang:system_time(millisecond),
     Fun = fun() ->
-        gen_server:call(Pid, {process, NsOpts, Request, Context}, Timeout)
+        gen_server:call(Pid, {process, NsOpts, Request, Context, otel_ctx:get_current()}, Timeout)
     end,
-    prg_utils:with_observe(Fun, ?PROCESSING_KEY, [NS, erlang:atom_to_list(TaskType)]).
+    prg_utils:with_observe(Fun, ?PROCESSING_KEY, [NS, erlang:atom_to_list(TaskType)], #{
+        name => atom_to_binary(?FUNCTION_NAME),
+        kind => server
+    }).
 
 %% storage wrappers
 -spec complete_and_continue(
@@ -71,13 +74,14 @@ complete_and_continue(Pid, _Deadline, StorageOpts, NsId, TaskResult, ProcessUpda
     Fun = fun() ->
         gen_server:call(
             Pid,
-            {complete_and_continue, StorageOpts, NsId, TaskResult, ProcessUpdates, Events, Task},
+            {complete_and_continue, StorageOpts, NsId, TaskResult, ProcessUpdates, Events, Task,
+                otel_ctx:get_current()},
             infinity
         )
     end,
-    prg_utils:with_observe(Fun, ?COMPLETION_KEY, [
-        erlang:atom_to_list(NsId), "complete_and_continue"
-    ]).
+    prg_utils:with_observe(Fun, ?COMPLETION_KEY, [erlang:atom_to_list(NsId), "complete_and_continue"], #{
+        name => atom_to_binary(?FUNCTION_NAME)
+    }).
 
 -spec complete_and_suspend(
     pid(),
@@ -93,11 +97,13 @@ complete_and_suspend(Pid, _Deadline, StorageOpts, NsId, TaskResult, ProcessUpdat
     Fun = fun() ->
         gen_server:call(
             Pid,
-            {complete_and_suspend, StorageOpts, NsId, TaskResult, ProcessUpdates, Events},
+            {complete_and_suspend, StorageOpts, NsId, TaskResult, ProcessUpdates, Events, otel_ctx:get_current()},
             infinity
         )
     end,
-    prg_utils:with_observe(Fun, ?COMPLETION_KEY, [erlang:atom_to_list(NsId), "complete_and_suspend"]).
+    prg_utils:with_observe(Fun, ?COMPLETION_KEY, [erlang:atom_to_list(NsId), "complete_and_suspend"], #{
+        name => atom_to_binary(?FUNCTION_NAME)
+    }).
 
 -spec complete_and_unlock(
     pid(),
@@ -113,11 +119,13 @@ complete_and_unlock(Pid, _Deadline, StorageOpts, NsId, TaskResult, ProcessUpdate
     Fun = fun() ->
         gen_server:call(
             Pid,
-            {complete_and_unlock, StorageOpts, NsId, TaskResult, ProcessUpdates, Events},
+            {complete_and_unlock, StorageOpts, NsId, TaskResult, ProcessUpdates, Events, otel_ctx:get_current()},
             infinity
         )
     end,
-    prg_utils:with_observe(Fun, ?COMPLETION_KEY, [erlang:atom_to_list(NsId), "complete_and_unlock"]).
+    prg_utils:with_observe(Fun, ?COMPLETION_KEY, [erlang:atom_to_list(NsId), "complete_and_unlock"], #{
+        name => atom_to_binary(?FUNCTION_NAME)
+    }).
 
 -spec complete_and_error(
     pid(), timestamp_ms(), storage_opts(), namespace_id(), task_result(), process_updates()
@@ -128,20 +136,22 @@ complete_and_error(Pid, _Deadline, StorageOpts, NsId, TaskResult, ProcessUpdates
     Fun = fun() ->
         gen_server:call(
             Pid,
-            {complete_and_error, StorageOpts, NsId, TaskResult, ProcessUpdates},
+            {complete_and_error, StorageOpts, NsId, TaskResult, ProcessUpdates, otel_ctx:get_current()},
             infinity
         )
     end,
-    prg_utils:with_observe(Fun, ?COMPLETION_KEY, [erlang:atom_to_list(NsId), "complete_and_error"]).
+    prg_utils:with_observe(Fun, ?COMPLETION_KEY, [erlang:atom_to_list(NsId), "complete_and_error"], #{
+        name => atom_to_binary(?FUNCTION_NAME)
+    }).
 
 -spec remove_process(pid(), timestamp_ms(), storage_opts(), namespace_id(), id()) ->
     ok | no_return().
 remove_process(Pid, _Deadline, StorageOpts, NsId, ProcessId) ->
     %% Timeout = Deadline - erlang:system_time(millisecond),
     Fun = fun() ->
-        gen_server:call(Pid, {remove_process, StorageOpts, NsId, ProcessId}, infinity)
+        gen_server:call(Pid, {remove_process, StorageOpts, NsId, ProcessId, otel_ctx:get_current()}, infinity)
     end,
-    prg_utils:with_observe(Fun, ?REMOVING_KEY, [erlang:atom_to_list(NsId)]).
+    prg_utils:with_observe(Fun, ?REMOVING_KEY, [erlang:atom_to_list(NsId)], #{name => atom_to_binary(?FUNCTION_NAME)}).
 
 %% notifier wrappers
 
@@ -151,7 +161,7 @@ event_sink(Pid, Deadline, #{namespace := NS} = NsOpts, ProcessId, Events) ->
     Fun = fun() ->
         gen_server:call(Pid, {event_sink, NsOpts, ProcessId, Events}, Timeout)
     end,
-    prg_utils:with_observe(Fun, ?NOTIFICATION_KEY, [NS, "event_sink"]).
+    prg_utils:with_observe(Fun, ?NOTIFICATION_KEY, [NS, "event_sink"], #{name => atom_to_binary(?FUNCTION_NAME)}).
 
 -spec lifecycle_sink(pid(), timestamp_ms(), namespace_opts(), task_t() | {error, _Reason}, id()) ->
     ok | no_return().
@@ -160,7 +170,7 @@ lifecycle_sink(Pid, Deadline, #{namespace := NS} = NsOpts, TaskType, ProcessId) 
     Fun = fun() ->
         gen_server:call(Pid, {lifecycle_sink, NsOpts, TaskType, ProcessId}, Timeout)
     end,
-    prg_utils:with_observe(Fun, ?NOTIFICATION_KEY, [NS, "lifecycle_sink"]).
+    prg_utils:with_observe(Fun, ?NOTIFICATION_KEY, [NS, "lifecycle_sink"], #{name => atom_to_binary(?FUNCTION_NAME)}).
 %%
 
 -spec get_process(pid(), timestamp_ms(), storage_opts(), namespace_id(), id()) ->
@@ -196,11 +206,13 @@ handle_call(
         process,
         #{processor := #{client := Handler, options := Options}, namespace := _NsName} = _NsOpts,
         Request,
-        Ctx
+        Ctx,
+        OtelCtx
     },
     _From,
     #prg_sidecar_state{} = State
 ) ->
+    _ = otel_ctx:attach(OtelCtx),
     Response =
         try Handler:process(Request, Options, Ctx) of
             {ok, _Result} = OK ->
@@ -218,20 +230,22 @@ handle_call(
         end,
     {reply, Response, State};
 handle_call(
-    {complete_and_continue, StorageOpts, NsId, TaskResult, Process, Events, Task},
+    {complete_and_continue, StorageOpts, NsId, TaskResult, Process, Events, Task, OtelCtx},
     _From,
     #prg_sidecar_state{} = State
 ) ->
+    _ = otel_ctx:attach(OtelCtx),
     Fun = fun() ->
         prg_storage:complete_and_continue(StorageOpts, NsId, TaskResult, Process, Events, Task)
     end,
     Response = do_with_retry(Fun, ?DEFAULT_DELAY),
     {reply, Response, State};
 handle_call(
-    {remove_process, StorageOpts, NsId, ProcessId},
+    {remove_process, StorageOpts, NsId, ProcessId, OtelCtx},
     _From,
     #prg_sidecar_state{} = State
 ) ->
+    _ = otel_ctx:attach(OtelCtx),
     Fun = fun() ->
         prg_storage:remove_process(StorageOpts, NsId, ProcessId)
     end,
@@ -258,30 +272,33 @@ handle_call(
     Response = do_with_retry(Fun, ?DEFAULT_DELAY),
     {reply, Response, State};
 handle_call(
-    {complete_and_suspend, StorageOpts, NsId, TaskResult, Process, Events},
+    {complete_and_suspend, StorageOpts, NsId, TaskResult, Process, Events, OtelCtx},
     _From,
     #prg_sidecar_state{} = State
 ) ->
+    _ = otel_ctx:attach(OtelCtx),
     Fun = fun() ->
         prg_storage:complete_and_suspend(StorageOpts, NsId, TaskResult, Process, Events)
     end,
     Response = do_with_retry(Fun, ?DEFAULT_DELAY),
     {reply, Response, State};
 handle_call(
-    {complete_and_unlock, StorageOpts, NsId, TaskResult, Process, Events},
+    {complete_and_unlock, StorageOpts, NsId, TaskResult, Process, Events, OtelCtx},
     _From,
     #prg_sidecar_state{} = State
 ) ->
+    _ = otel_ctx:attach(OtelCtx),
     Fun = fun() ->
         prg_storage:complete_and_unlock(StorageOpts, NsId, TaskResult, Process, Events)
     end,
     Response = do_with_retry(Fun, ?DEFAULT_DELAY),
     {reply, Response, State};
 handle_call(
-    {complete_and_error, StorageOpts, NsId, TaskResult, Process},
+    {complete_and_error, StorageOpts, NsId, TaskResult, Process, OtelCtx},
     _From,
     #prg_sidecar_state{} = State
 ) ->
+    _ = otel_ctx:attach(OtelCtx),
     Fun = fun() ->
         prg_storage:complete_and_error(StorageOpts, NsId, TaskResult, Process)
     end,
