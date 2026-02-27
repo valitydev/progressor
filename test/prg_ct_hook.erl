@@ -53,7 +53,9 @@ app_list() ->
     [
         {epg_connector, app_env(epg_connector)},
         {brod, app_env(brod)},
-        {progressor, app_env(progressor)}
+        {progressor, app_env(progressor)},
+        {opentelemetry_exporter, []},
+        {opentelemetry, [{span_processor, simple}]}
     ].
 
 app_env(progressor) ->
