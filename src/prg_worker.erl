@@ -23,7 +23,13 @@
 -record(prg_worker_state, {ns_id, ns_opts, process, sidecar_pid}).
 
 -define(DEFAULT_RANGE, #{direction => forward}).
--define(CAPTURE_DEFENSE_INTERVAL_MS, 100).
+%% 1 second
+-define(MIN_SCHEDULE_STEP_US, 1000000).
+%% 10 millisecond
+-define(SCHEDULE_DEFENSE_INTERVAL_US, 10000).
+-define(SCHEDULE_DEFENSE_INTERVAL_MS, ?SCHEDULE_DEFENSE_INTERVAL_US div 1000).
+%% Used to prevent timing errors caused by scheduler overhead
+-define(EFFECTIVE_SCHEDULE_STEP_US, ?MIN_SCHEDULE_STEP_US - ?SCHEDULE_DEFENSE_INTERVAL_US).
 
 %%%
 %%% API
@@ -266,7 +272,9 @@ success_and_continue(Intent, TaskHeader, Task, Deadline, State) ->
     _ = maybe_reply(TaskHeader, Response),
     case SaveResult of
         {ok, [#{status := <<"waiting">>, task_id := NextTaskId, scheduled_time := Ts} | _]} ->
-            RunAfterMs = (Ts - Now) div 1000 - ?CAPTURE_DEFENSE_INTERVAL_MS,
+            %% if status=waiting then expression (Ts - Now) div 1000
+            %% is guaranteed to return >= 1000 because see create_status/1
+            RunAfterMs = (Ts - Now) div 1000 - ?SCHEDULE_DEFENSE_INTERVAL_MS,
             ok = prg_scheduler:schedule_task(NsId, ProcessId, NextTaskId, RunAfterMs),
             ok = next_task(self()),
             State#prg_worker_state{process = undefined};
@@ -426,10 +434,16 @@ success_and_unlock(Intent, TaskHeader, Task, Deadline, State) ->
             ok = next_task(self()),
             State#prg_worker_state{process = undefined};
         {ok, [#{status := <<"waiting">>, task_id := NextTaskId, scheduled_time := Ts} | _]} ->
-            RunAfterMs = (Ts - Now) div 1000 - ?CAPTURE_DEFENSE_INTERVAL_MS,
-            ok = prg_scheduler:schedule_task(NsId, ProcessId, NextTaskId, RunAfterMs),
-            ok = next_task(self()),
-            State#prg_worker_state{process = undefined};
+            case (Ts - Now) div 1000 of
+                Timeout when Timeout =< ?SCHEDULE_DEFENSE_INTERVAL_MS ->
+                    process_scheduled_task(self(), ProcessId, NextTaskId),
+                    State#prg_worker_state{process = undefined};
+                Timeout when Timeout > ?SCHEDULE_DEFENSE_INTERVAL_MS ->
+                    RunAfterMs = Timeout - ?SCHEDULE_DEFENSE_INTERVAL_MS,
+                    ok = prg_scheduler:schedule_task(NsId, ProcessId, NextTaskId, RunAfterMs),
+                    ok = next_task(self()),
+                    State#prg_worker_state{process = undefined}
+            end;
         {ok, [#{status := <<"running">>} = ContinuationTask | _]} ->
             NewHistory = maps:get(history, Process) ++ Events,
             ok = continuation_task(self(), create_header(ContinuationTask), ContinuationTask),
@@ -511,7 +525,10 @@ error_and_retry({error, Reason} = Response, TaskHeader, Task, Deadline, State) -
                     NewTask
                 ),
                 Now = erlang:system_time(microsecond),
-                RunAfterMs = (Ts - Now) div 1000 - ?CAPTURE_DEFENSE_INTERVAL_MS,
+                %% The retry policy only supports a second time scale
+                %% this ensures that the result of the expression (Ts - Now) div 1000
+                %% will be greater than 1000
+                RunAfterMs = (Ts - Now) div 1000 - ?SCHEDULE_DEFENSE_INTERVAL_MS,
                 ok = prg_scheduler:schedule_task(NsId, ProcessId, NextTaskId, RunAfterMs)
         end,
     ok = next_task(self()),
@@ -681,10 +698,21 @@ is_retryable(Error, {timeout, undefined}, RetryPolicy, Timeout, Attempts) ->
 is_retryable(_Error, _TaskHeader, _RetryPolicy, _Timeout, _Attempts) ->
     false.
 
+%% Due to the difference in the time scales used for storage (microseconds)
+%% and the schedule time (seconds), the following logic is required:
+%% - If the difference between the schedule and the current time is less than a 1 second
+%%   the task is assigned the status "running" and is processed immediately
+%% - If the difference between the schedule and the current time exceeds 1 second
+%%   the task is assigned the status "waiting" and is saved to the schedule
 create_status(Timestamp, Now) when Timestamp =< Now ->
     <<"running">>;
-create_status(_Timestamp, _Now) ->
-    <<"waiting">>.
+create_status(Timestamp, Now) ->
+    case (Timestamp - Now) >= ?EFFECTIVE_SCHEDULE_STEP_US of
+        true ->
+            <<"waiting">>;
+        false ->
+            <<"running">>
+    end.
 
 create_header(#{task_type := <<"timeout">>}) ->
     {timeout, undefined};

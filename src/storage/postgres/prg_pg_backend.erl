@@ -1148,13 +1148,6 @@ daytime_to_unixtime({Date, {Hour, Minute, SecondWithMicro}}) ->
     MicroPart = trunc(SecondWithMicro * 1000000) rem 1000000,
     GregorianSeconds = calendar:datetime_to_gregorian_seconds({Date, {Hour, Minute, trunc(SecondWithMicro)}}),
     (GregorianSeconds - ?EPOCH_DIFF) * 1000000 + MicroPart.
-%    to_unixtime(calendar:datetime_to_gregorian_seconds({Date, {Hour, Minute, trunc(SecondWithMicro)}}))
-%    daytime_to_unixtime({Date, {Hour, Minute, trunc(Second)}});
-%daytime_to_unixtime(Daytime) ->
-%    to_unixtime(calendar:datetime_to_gregorian_seconds(Daytime)).
-
-%to_unixtime(Time) when is_integer(Time) ->
-%    Time - ?EPOCH_DIFF.
 
 unixtime_to_datetime(null) ->
     null;
