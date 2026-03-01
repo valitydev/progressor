@@ -527,7 +527,7 @@ error_and_retry({error, Reason} = Response, TaskHeader, Task, Deadline, State) -
                 Now = erlang:system_time(microsecond),
                 %% The retry policy only supports a second time scale
                 %% this ensures that the result of the expression (Ts - Now) div 1000
-                %% will be greater than 1000
+                %% will be greater or approximately equal 1000
                 RunAfterMs = (Ts - Now) div 1000 - ?SCHEDULE_DEFENSE_INTERVAL_MS,
                 ok = prg_scheduler:schedule_task(NsId, ProcessId, NextTaskId, RunAfterMs)
         end,
@@ -700,9 +700,9 @@ is_retryable(_Error, _TaskHeader, _RetryPolicy, _Timeout, _Attempts) ->
 
 %% Due to the difference in the time scales used for storage (microseconds)
 %% and the schedule time (seconds), the following logic is required:
-%% - If the difference between the schedule and the current time is less than a 1 second
+%% - If the difference between the schedule and the current time is less than a ~1 second
 %%   the task is assigned the status "running" and is processed immediately
-%% - If the difference between the schedule and the current time exceeds 1 second
+%% - If the difference between the schedule and the current time exceeds ~1 second
 %%   the task is assigned the status "waiting" and is saved to the schedule
 create_status(Timestamp, Now) when Timestamp =< Now ->
     <<"running">>;
