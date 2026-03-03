@@ -1289,8 +1289,7 @@ marshal_event(Event) ->
             (<<"process_id">>, ProcessId, Acc) -> Acc#{process_id => ProcessId};
             (<<"task_id">>, TaskId, Acc) -> Acc#{task_id => TaskId};
             (<<"event_id">>, EventId, Acc) -> Acc#{event_id => EventId};
-            %% TODO: to micro after processors?
-            (<<"timestamp">>, Ts, Acc) -> Acc#{timestamp => prg_utils:to_seconds(Ts)};
+            (<<"timestamp">>, Ts, Acc) -> Acc#{timestamp => prg_utils:to_microseconds(Ts)};
             (<<"metadata">>, MetaData, Acc) -> Acc#{metadata => MetaData};
             (<<"payload">>, Payload, Acc) -> Acc#{payload => Payload};
             (_, _, Acc) -> Acc
@@ -1317,8 +1316,7 @@ marshal_trace(Trace) ->
             (<<"last_retry_interval">>, Interval, Acc) -> Acc#{retry_interval => Interval};
             (<<"attempts_count">>, Attempts, Acc) -> Acc#{retry_attempts => Attempts};
             (<<"event_id">>, EventId, Acc) -> Acc#{event_id => EventId};
-            %% TODO: to micro after processors?
-            (<<"event_timestamp">>, Ts, Acc) -> Acc#{event_timestamp => prg_utils:to_seconds(Ts)};
+            (<<"event_timestamp">>, Ts, Acc) -> Acc#{event_timestamp => prg_utils:to_microseconds(Ts)};
             (<<"event_metadata">>, Meta, Acc) -> Acc#{event_metadata => Meta};
             (<<"event_payload">>, Payload, Acc) -> Acc#{event_payload => Payload};
             (_, _, Acc) -> Acc
