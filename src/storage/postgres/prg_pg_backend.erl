@@ -213,7 +213,7 @@ process_trace(PgOpts, NsId, ProcessId) ->
             "LEFT JOIN " ++ EventsTable ++
             " ne "
             "ON nt.task_id = ne.task_id AND nt.process_id = ne.process_id "
-            "WHERE nt.process_id = $1 ORDER BY nt.running_time, nt.finished_time, nt.task_id",
+            "WHERE nt.process_id = $1 ORDER BY nt.running_time, nt.finished_time, nt.task_id, ne.event_id",
         [ProcessId]
     ),
     case Result of
@@ -1152,16 +1152,14 @@ daytime_to_unixtime({Date, {Hour, Minute, SecondWithMicro}}) ->
 unixtime_to_datetime(null) ->
     null;
 unixtime_to_datetime(Timestamp) ->
-    {TimestampSec, Fractional} = parse_timestamp(Timestamp),
-    {Date, {Hour, Minute, Second}} = calendar:gregorian_seconds_to_datetime(TimestampSec + ?EPOCH_DIFF),
-    {Date, {Hour, Minute, Second + Fractional}}.
+    {Sec, MicroPart} = prg_utils:split_timestamp(Timestamp),
+    {Date, {Hour, Minute, Second}} = calendar:gregorian_seconds_to_datetime(Sec + ?EPOCH_DIFF),
+    {Date, {Hour, Minute, Second + MicroPart / 1000000}}.
 
 unixtime_to_text(Timestamp) ->
-    {TimestampSec, MicroSec} = parse_timestamp(Timestamp, integer),
-    {
-        {Year, Month, Day},
-        {Hour, Minute, Seconds}
-    } = calendar:gregorian_seconds_to_datetime(TimestampSec + ?EPOCH_DIFF),
+    {Sec, MicroPart} = prg_utils:split_timestamp(Timestamp),
+    {{Year, Month, Day}, {Hour, Minute, Seconds}} =
+        calendar:gregorian_seconds_to_datetime(Sec + ?EPOCH_DIFF),
     <<
         (integer_to_binary(Year))/binary,
         "-",
@@ -1175,63 +1173,13 @@ unixtime_to_text(Timestamp) ->
         ":",
         (maybe_add_zero(Seconds))/binary,
         ".",
-        (microsecond_part(MicroSec))/binary
+        (prg_utils:format_microseconds(MicroPart))/binary
     >>.
 
 maybe_add_zero(Val) when Val < 10 ->
     <<"0", (integer_to_binary(Val))/binary>>;
 maybe_add_zero(Val) ->
     integer_to_binary(Val).
-
-microsecond_part(0) ->
-    <<"0">>;
-microsecond_part(Val) when Val < 10 ->
-    <<"00000", (integer_to_binary(Val))/binary>>;
-microsecond_part(Val) when Val < 100 ->
-    <<"0000", (integer_to_binary(Val))/binary>>;
-microsecond_part(Val) when Val < 1000 ->
-    <<"000", (integer_to_binary(Val))/binary>>;
-microsecond_part(Val) when Val < 10000 ->
-    <<"00", (integer_to_binary(Val))/binary>>;
-microsecond_part(Val) when Val < 100000 ->
-    <<"0", (integer_to_binary(Val))/binary>>;
-microsecond_part(Val) ->
-    <<(integer_to_binary(Val))/binary>>.
-
--spec parse_timestamp(Timestamp :: integer()) -> {timestamp_sec(), float() | integer()}.
-parse_timestamp(Timestamp) ->
-    parse_timestamp(Timestamp, fractional).
-
-parse_timestamp(Timestamp, Opts) ->
-    if
-        Timestamp < 100000000000 ->
-            %% seconds
-            {Timestamp, 0};
-        Timestamp < 100000000000000 ->
-            %% milliseconds
-            TimestampSec = Timestamp div 1000,
-            {TimestampSec, remainder_timestamp(Opts, 1000, Timestamp)};
-        Timestamp < 100000000000000000 ->
-            %% microseconds
-            TimestampSec = Timestamp div 1000000,
-            {TimestampSec, remainder_timestamp(Opts, 1000000, Timestamp)};
-        true ->
-            error({unsupported_time_unit, Timestamp})
-    end.
-
-remainder_timestamp(fractional, Ratio, Timestamp) ->
-    %% 1 millisec -> 0.001 sec
-    %% 1 microsec -> 0.000001 sec
-    (Timestamp rem Ratio) / Ratio;
-remainder_timestamp(integer, Ratio, Timestamp) ->
-    case Ratio of
-        1000000 ->
-            %% microseconds as is
-            Timestamp rem 1000000;
-        1000 ->
-            %% milliseconds to microseconds
-            (Timestamp rem 1000) * 1000
-    end.
 
 json_encode(null) ->
     null;

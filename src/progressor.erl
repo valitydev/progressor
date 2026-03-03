@@ -339,7 +339,12 @@ do_trace(#{ns_opts := #{storage := StorageOpts}, id := Id, ns := NsId}) ->
                 #{},
                 RawTrace
             ),
-            Trace = lists:map(fun({_Pos, Unit}) -> Unit end, lists:sort(maps:values(TraceMap))),
+            Trace = lists:map(
+                fun({_Pos, #{events := Events} = Unit}) ->
+                    Unit#{events := lists:reverse(Events)}
+                end,
+                lists:sort(maps:values(TraceMap))
+            ),
             {ok, Trace};
         Error ->
             Error

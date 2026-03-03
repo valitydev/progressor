@@ -9,10 +9,22 @@
 -export([make_ns_opts/2]).
 -export([unixtime_to_datetime/1]).
 -export([with_observe/4]).
--export([to_microseconds/1]).
--export([to_seconds/1]).
 -export([with_observe/5]).
 -export([with_span/2]).
+
+%% Time conversion
+-export([detect_unit/1]).
+-export([to_microseconds/1]).
+-export([to_seconds/1]).
+-export([split_timestamp/1]).
+-export([format_microseconds/1]).
+
+-type time_unit() :: second | millisecond | microsecond.
+
+%% Boundaries based on unix epoch (~5138 year)
+-define(MAX_SECONDS, 100000000000).
+-define(MAX_MILLISECONDS, 100000000000000).
+-define(MAX_MICROSECONDS, 100000000000000000).
 
 -spec registered_name(atom(), string()) -> atom().
 registered_name(BaseAtom, PostfixStr) ->
@@ -94,34 +106,38 @@ collect(histogram, MetricKey, Labels, Value) ->
 %%    %% TODO implement it
 %%    ok.
 
+-spec detect_unit(non_neg_integer()) -> time_unit() | no_return().
+detect_unit(Ts) when Ts < ?MAX_SECONDS -> second;
+detect_unit(Ts) when Ts < ?MAX_MILLISECONDS -> millisecond;
+detect_unit(Ts) when Ts < ?MAX_MICROSECONDS -> microsecond;
+detect_unit(Ts) -> error({unsupported_time_unit, Ts}).
+
 -spec to_microseconds(non_neg_integer()) -> non_neg_integer() | no_return().
-to_microseconds(Timestamp) ->
-    if
-        Timestamp < 100000000000 ->
-            %% seconds
-            Timestamp * 1000000;
-        Timestamp < 100000000000000 ->
-            %% milliseconds
-            Timestamp * 1000;
-        Timestamp < 100000000000000000 ->
-            %% microseconds
-            Timestamp;
-        true ->
-            error({unsupported_time_unit, Timestamp})
+to_microseconds(Ts) ->
+    case detect_unit(Ts) of
+        second -> Ts * 1000000;
+        millisecond -> Ts * 1000;
+        microsecond -> Ts
     end.
 
 -spec to_seconds(non_neg_integer()) -> non_neg_integer() | no_return().
-to_seconds(Timestamp) ->
-    if
-        Timestamp < 100000000000 ->
-            %% seconds
-            Timestamp;
-        Timestamp < 100000000000000 ->
-            %% milliseconds
-            Timestamp div 1000;
-        Timestamp < 100000000000000000 ->
-            %% microseconds
-            Timestamp div 1000000;
-        true ->
-            error({unsupported_time_unit, Timestamp})
+to_seconds(Ts) ->
+    case detect_unit(Ts) of
+        second -> Ts;
+        millisecond -> Ts div 1000;
+        microsecond -> Ts div 1000000
     end.
+
+-spec split_timestamp(non_neg_integer()) -> {Seconds :: non_neg_integer(), MicroPart :: non_neg_integer()}.
+split_timestamp(Ts) ->
+    case detect_unit(Ts) of
+        second -> {Ts, 0};
+        millisecond -> {Ts div 1000, (Ts rem 1000) * 1000};
+        microsecond -> {Ts div 1000000, Ts rem 1000000}
+    end.
+
+-spec format_microseconds(non_neg_integer()) -> binary().
+format_microseconds(Val) ->
+    Bin = integer_to_binary(Val),
+    Pad = 6 - byte_size(Bin),
+    <<(binary:copy(<<"0">>, Pad))/binary, Bin/binary>>.
