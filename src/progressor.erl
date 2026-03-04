@@ -329,15 +329,74 @@ do_get(#{ns_opts := #{storage := StorageOpts}, id := Id, ns := NsId, range := Hi
 do_get(Req) ->
     do_get(Req#{range => #{}}).
 
+-define(EVENTS_KEYS, [event_id, event_timestamp, event_metadata, event_payload]).
+
 do_trace(#{ns_opts := #{storage := StorageOpts}, id := Id, ns := NsId}) ->
-    prg_storage:process_trace(StorageOpts, NsId, Id).
-do_put(#{ns_opts := #{storage := StorageOpts}, id := Id, ns := NsId, args := #{process := Process} = Args} = Opts) ->
+    case prg_storage:process_trace(StorageOpts, NsId, Id) of
+        {ok, RawTrace} ->
+            TraceMap = lists:foldl(
+                fun update_trace/2,
+                #{},
+                RawTrace
+            ),
+            Trace = lists:map(
+                fun({_Pos, #{events := Events} = Unit}) ->
+                    Unit#{events := lists:reverse(Events)}
+                end,
+                lists:sort(maps:values(TraceMap))
+            ),
+            {ok, Trace};
+        Error ->
+            Error
+    end.
+
+update_trace(#{task_id := TaskId, event_id := _EventId} = RawTraceUnit, Acc) ->
+    maps:update_with(
+        TaskId,
+        fun(V) -> update_trace_unit(RawTraceUnit, V) end,
+        {
+            maps:size(Acc) + 1,
+            (maps:without(?EVENTS_KEYS, RawTraceUnit))#{
+                events => [maps:with(?EVENTS_KEYS, RawTraceUnit)]
+            }
+        },
+        Acc
+    );
+update_trace(#{task_id := TaskId} = _RawTraceUnit, Acc) when is_map_key(TaskId, Acc) ->
+    Acc;
+update_trace(#{task_id := TaskId} = RawTraceUnit, Acc) ->
+    Acc#{
+        TaskId => {maps:size(Acc) + 1, (maps:without(?EVENTS_KEYS, RawTraceUnit))#{events => []}}
+    }.
+
+update_trace_unit(RawTraceUnit, {Pos, TraceUnit}) ->
+    TraceUnitUpdated = maps:update_with(
+        events,
+        fun(ListEvents) ->
+            [
+                maps:with(?EVENTS_KEYS, RawTraceUnit)
+                | ListEvents
+            ]
+        end,
+        [maps:with(?EVENTS_KEYS, RawTraceUnit)],
+        TraceUnit
+    ),
+    {Pos, TraceUnitUpdated}.
+
+do_put(
+    #{
+        ns_opts := #{storage := StorageOpts},
+        id := Id,
+        ns := NsId,
+        args := #{process := Process} = Args
+    } = Opts
+) ->
     #{
         process_id := ProcessId
     } = Process,
     Action = maps:get(action, Args, undefined),
     Context = maps:get(context, Opts, <<>>),
-    Now = erlang:system_time(second),
+    Now = erlang:system_time(microsecond),
     InitTask = #{
         process_id => ProcessId,
         task_type => <<"init">>,
@@ -427,7 +486,7 @@ make_task(#{task_type := TaskType} = TaskData) when
     TaskType =:= <<"call">>;
     TaskType =:= <<"repair">>
 ->
-    Now = erlang:system_time(second),
+    Now = erlang:system_time(microsecond),
     Defaults = #{
         status => <<"running">>,
         scheduled_time => Now,
@@ -437,7 +496,7 @@ make_task(#{task_type := TaskType} = TaskData) when
     },
     maps:merge(Defaults, TaskData);
 make_task(#{task_type := <<"timeout">>} = TaskData) ->
-    Now = erlang:system_time(second),
+    Now = erlang:system_time(microsecond),
     Defaults = #{
         %% TODO
         metadata => #{<<"kind">> => <<"simple_repair">>},
@@ -448,7 +507,7 @@ make_task(#{task_type := <<"timeout">>} = TaskData) ->
     },
     maps:merge(Defaults, TaskData);
 make_task(#{task_type := <<"notify">>} = TaskData) ->
-    Now = erlang:system_time(second),
+    Now = erlang:system_time(microsecond),
     Defaults = #{
         status => <<"running">>,
         scheduled_time => Now,
@@ -491,7 +550,7 @@ action_to_task(#{set_timer := Timestamp} = Action, ProcessId, Context) ->
         status => <<"waiting">>,
         args => <<>>,
         context => Context,
-        scheduled_time => Timestamp,
+        scheduled_time => prg_utils:to_microseconds(Timestamp),
         last_retry_interval => 0,
         attempts_count => 0
     }.
