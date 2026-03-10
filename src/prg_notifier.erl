@@ -132,8 +132,9 @@ serialize_content(Array) when is_list(Array) ->
 serialize_content(Arg) ->
     erlang:error(badarg, [Arg]).
 
-serialize_timestamp(TimestampSec) ->
-    Str = calendar:system_time_to_rfc3339(TimestampSec, [{unit, second}, {offset, "Z"}]),
+serialize_timestamp(Timestamp) ->
+    TsMicro = prg_utils:to_microseconds(Timestamp),
+    Str = calendar:system_time_to_rfc3339(TsMicro, [{unit, microsecond}, {offset, "Z"}]),
     erlang:list_to_binary(Str).
 
 %% lifecycle serialization

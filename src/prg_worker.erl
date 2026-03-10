@@ -487,12 +487,7 @@ error_and_retry({error, Reason} = Response, TaskHeader, Task, Deadline, State) -
         process = #{process_id := ProcessId} = Process,
         sidecar_pid = Pid
     } = State,
-    TaskResult = #{
-        task_id => TaskId,
-        response => term_to_binary(Response),
-        finished_time => erlang:system_time(microsecond),
-        status => <<"error">>
-    },
+    TaskResult = task_result(Task, <<"error">>, Response),
     _ =
         case check_retryable(TaskHeader, Task, RetryPolicy, Reason) of
             not_retryable ->
