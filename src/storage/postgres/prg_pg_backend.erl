@@ -28,6 +28,7 @@
 -export([complete_and_error/4]).
 -export([remove_process/3]).
 -export([capture_task/3]).
+-export([reschedule_task/3]).
 
 %% shared functions
 -export([get_task/4]).
@@ -370,6 +371,26 @@ capture_task(PgOpts, NsId, TaskId) ->
             end
         ),
     to_maps(Columns, Rows, fun marshal_task/1).
+
+-spec reschedule_task(pg_opts(), namespace_id(), task()) -> ok | no_return().
+reschedule_task(PgOpts, NsId, #{task_id := TaskId} = Task) ->
+    Pool = get_pool(internal, PgOpts),
+    #{
+        schedule := ScheduleTable,
+        running := RunningTable
+    } = prg_pg_utils:tables(NsId),
+    ScheduledTask = maps:merge(
+        maps:without([running_time], Task),
+        #{status => <<"waiting">>}
+    ),
+    epg_pool:transaction(
+        Pool,
+        fun(Connection) ->
+            {ok, _} = do_delete_running(Connection, RunningTable, TaskId),
+            {ok, _, _, _} = do_save_schedule(Connection, ScheduleTable, ScheduledTask)
+        end
+    ),
+    ok.
 
 -spec search_calls(pg_opts(), namespace_id(), pos_integer()) -> [task()].
 search_calls(PgOpts, NsId, Limit) ->
@@ -881,6 +902,13 @@ do_save_running(Connection, Table, Task, Returning) ->
             AttemptsCount,
             Context
         ]
+    ).
+
+do_delete_running(Connection, Table, TaskId) ->
+    epg_pool:query(
+        Connection,
+        "DELETE FROM " ++ Table ++ " WHERE task_id = $1",
+        [TaskId]
     ).
 
 do_save_schedule(Connection, Table, Task) ->

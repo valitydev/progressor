@@ -25,6 +25,7 @@
 -export([complete_and_error/4]).
 -export([remove_process/3]).
 -export([capture_task/3]).
+-export([reschedule_task/3]).
 
 %% shared functions
 -export([get_task/3]).
@@ -145,6 +146,10 @@ remove_process(#{client := Handler, options := HandlerOpts}, NsId, ProcessId) ->
 -spec capture_task(storage_opts(), namespace_id(), task_id()) -> [task()].
 capture_task(#{client := Handler, options := HandlerOpts}, NsId, TaskId) ->
     Handler:capture_task(HandlerOpts, NsId, TaskId).
+
+-spec reschedule_task(storage_opts(), namespace_id(), task()) -> ok | no_return().
+reschedule_task(#{client := Handler, options := HandlerOpts}, NsId, Task) ->
+    Handler:reschedule_task(HandlerOpts, NsId, Task).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% Shared functions (recipient required)

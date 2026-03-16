@@ -135,15 +135,26 @@ handle_cast(next_task, #prg_worker_state{sidecar_pid = CurrentPid} = State) ->
     true = erlang:unlink(CurrentPid),
     true = erlang:exit(CurrentPid, kill),
     {stop, normal, State#prg_worker_state{continuation = undefined}}.
-%exit(normal).
 
 handle_info(_Info, #prg_worker_state{} = State) ->
     {noreply, State}.
 
-terminate(_Reason, #prg_worker_state{continuation = undefined} = _State) ->
+terminate(_Reason, #prg_worker_state{continuation = {{TaskType, _}, Task}} = State) when
+    TaskType =:= timeout;
+    TaskType =:= remove
+->
+    #prg_worker_state{
+        ns_id = NsId,
+        ns_opts = #{storage := StorageOpts} = _NsOpts
+    } = State,
+    try
+        prg_storage:reschedule_task(StorageOpts, NsId, Task)
+    catch
+        Class:Term:Trace ->
+            logger:error("reschedule task error: ~p", [[Class, Term, Trace]])
+    end,
     ok;
-terminate(_Reason, #prg_worker_state{continuation = _Continuation} = _State) ->
-    %% TODO: replace task in schedule
+terminate(_Reason, #prg_worker_state{} = _State) ->
     ok.
 
 code_change(_OldVsn, #prg_worker_state{} = State, _Extra) ->
