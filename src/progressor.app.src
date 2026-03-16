@@ -9,6 +9,7 @@
         jsx,
         prometheus,
         epg_connector,
+        epg_migrator,
         thrift,
         mg_proto,
         brod,

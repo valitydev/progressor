@@ -682,7 +682,19 @@ complete_and_unlock(PgOpts, NsId, TaskResult, ProcessUpdates, Events) ->
 
 -spec db_init(pg_opts(), namespace_id()) -> ok.
 db_init(PgOpts, NsId) ->
-    prg_pg_migration:db_init(PgOpts, NsId).
+    Pool = get_pool(internal, PgOpts),
+    {ok, Pools} = application:get_env(epg_connector, pools),
+    {ok, Databases} = application:get_env(epg_connector, databases),
+    #{database := DbRef} = maps:get(Pool, Pools),
+    DbOpts = maps:get(DbRef, Databases),
+
+    PrivDir = code:priv_dir(progressor),
+    MigrationsDir = filename:join([PrivDir, "migrations"]),
+    MigrationOpts = [{namespace, NsId}],
+    Realm = erlang:atom_to_binary(NsId),
+
+    {ok, _} = epg_migrator:perform(Realm, DbOpts, MigrationOpts, MigrationsDir),
+    ok.
 
 %-ifdef(TEST).
 
