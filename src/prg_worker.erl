@@ -16,11 +16,11 @@
 -export([handle_continue/2]).
 
 -export([process_task/3]).
--export([continuation_task/3]).
+-export([continuation_task/1]).
 -export([next_task/1]).
 -export([process_scheduled_task/3]).
 
--record(prg_worker_state, {ns_id, ns_opts, process, sidecar_pid}).
+-record(prg_worker_state, {ns_id, ns_opts, process, sidecar_pid, continuation}).
 
 -define(DEFAULT_RANGE, #{direction => forward}).
 %% 1 second
@@ -39,9 +39,9 @@
 process_task(Worker, TaskHeader, #{process_id := _ProcessId, task_id := _TaskId} = Task) ->
     gen_server:cast(Worker, {process_task, TaskHeader, Task, otel_ctx:get_current()}).
 
--spec continuation_task(pid(), task_header(), task()) -> ok.
-continuation_task(Worker, TaskHeader, Task) ->
-    gen_server:cast(Worker, {continuation_task, TaskHeader, Task, otel_ctx:get_current()}).
+-spec continuation_task(pid()) -> ok.
+continuation_task(Worker) ->
+    gen_server:cast(Worker, {continuation_task, otel_ctx:get_current()}).
 
 -spec next_task(pid()) -> ok.
 next_task(Worker) ->
@@ -96,8 +96,8 @@ handle_cast(
     NewState = do_process_task(TaskHeader, Task, Deadline, State#prg_worker_state{process = Process}),
     {noreply, NewState};
 handle_cast(
-    {continuation_task, TaskHeader, Task, OtelCtx},
-    #prg_worker_state{ns_opts = #{process_step_timeout := TimeoutSec}} = State
+    {continuation_task, OtelCtx},
+    #prg_worker_state{ns_opts = #{process_step_timeout := TimeoutSec}, continuation = {TaskHeader, Task}} = State
 ) ->
     _ = otel_ctx:attach(OtelCtx),
     Deadline = erlang:system_time(millisecond) + TimeoutSec * 1000,
@@ -130,16 +130,20 @@ handle_cast(
             ok = next_task(self()),
             {noreply, State}
     end;
-handle_cast(next_task, #prg_worker_state{sidecar_pid = CurrentPid}) ->
+handle_cast(next_task, #prg_worker_state{sidecar_pid = CurrentPid} = State) ->
     %% kill sidecar and restart to clear memory
     true = erlang:unlink(CurrentPid),
     true = erlang:exit(CurrentPid, kill),
-    exit(normal).
+    {stop, normal, State#prg_worker_state{continuation = undefined}}.
+%exit(normal).
 
 handle_info(_Info, #prg_worker_state{} = State) ->
     {noreply, State}.
 
-terminate(_Reason, #prg_worker_state{} = _State) ->
+terminate(_Reason, #prg_worker_state{continuation = undefined} = _State) ->
+    ok;
+terminate(_Reason, #prg_worker_state{continuation = _Continuation} = _State) ->
+    %% TODO: replace task in schedule
     ok.
 
 code_change(_OldVsn, #prg_worker_state{} = State, _Extra) ->
@@ -280,9 +284,10 @@ success_and_continue(Intent, TaskHeader, Task, Deadline, State) ->
             State#prg_worker_state{process = undefined};
         {ok, [ContinuationTask | _]} ->
             NewHistory = maps:get(history, Process) ++ Events,
-            ok = continuation_task(self(), create_header(ContinuationTask), ContinuationTask),
+            ok = continuation_task(self()),
             State#prg_worker_state{
-                process = ProcessUpdated#{history => NewHistory, last_event_id => last_event_id(NewHistory)}
+                process = ProcessUpdated#{history => NewHistory, last_event_id => last_event_id(NewHistory)},
+                continuation = {create_header(ContinuationTask), ContinuationTask}
             }
     end.
 
@@ -331,9 +336,10 @@ success_and_suspend(Intent, TaskHeader, Task, Deadline, State) ->
             State#prg_worker_state{process = undefined};
         {ok, [ContinuationTask | _]} ->
             NewHistory = maps:get(history, Process) ++ Events,
-            ok = continuation_task(self(), create_header(ContinuationTask), ContinuationTask),
+            ok = continuation_task(self()),
             State#prg_worker_state{
-                process = ProcessUpdated#{history => NewHistory, last_event_id => last_event_id(NewHistory)}
+                process = ProcessUpdated#{history => NewHistory, last_event_id => last_event_id(NewHistory)},
+                continuation = {create_header(ContinuationTask), ContinuationTask}
             }
     end.
 
@@ -385,9 +391,10 @@ success_and_unlock(
             ),
             _ = maybe_reply(TaskHeader, Response),
             NewHistory = maps:get(history, Process) ++ Events,
-            ok = continuation_task(self(), create_header(ContinuationTask), ContinuationTask),
+            ok = continuation_task(self()),
             State#prg_worker_state{
-                process = ProcessUpdated#{history => NewHistory, last_event_id => last_event_id(NewHistory)}
+                process = ProcessUpdated#{history => NewHistory, last_event_id => last_event_id(NewHistory)},
+                continuation = {create_header(ContinuationTask), ContinuationTask}
             };
         _ ->
             {ok, []} = prg_worker_sidecar:complete_and_unlock(
@@ -446,9 +453,10 @@ success_and_unlock(Intent, TaskHeader, Task, Deadline, State) ->
             end;
         {ok, [#{status := <<"running">>} = ContinuationTask | _]} ->
             NewHistory = maps:get(history, Process) ++ Events,
-            ok = continuation_task(self(), create_header(ContinuationTask), ContinuationTask),
+            ok = continuation_task(self()),
             State#prg_worker_state{
-                process = ProcessUpdated#{history => NewHistory, last_event_id => last_event_id(NewHistory)}
+                process = ProcessUpdated#{history => NewHistory, last_event_id => last_event_id(NewHistory)},
+                continuation = {create_header(ContinuationTask), ContinuationTask}
             }
     end.
 
