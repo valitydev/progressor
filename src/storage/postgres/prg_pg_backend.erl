@@ -721,7 +721,27 @@ db_init(PgOpts, NsId) ->
 
 -spec cleanup(_, _) -> _.
 cleanup(PgOpts, NsId) ->
-    prg_pg_migration:cleanup(PgOpts, NsId).
+    Pool = get_pool(internal, PgOpts),
+    #{
+        processes := ProcessesTable,
+        tasks := TaskTable,
+        schedule := ScheduleTable,
+        running := RunningTable,
+        events := EventsTable
+    } = prg_pg_utils:tables(NsId),
+    epg_pool:transaction(
+        Pool,
+        fun(Connection) ->
+            {ok, _, _} = epg_pool:query(Connection, "ALTER TABLE " ++ ProcessesTable ++ " DROP COLUMN corrupted_by"),
+            {ok, _, _} = epg_pool:query(Connection, "DROP TABLE " ++ EventsTable),
+            {ok, _, _} = epg_pool:query(Connection, "DROP TABLE " ++ RunningTable),
+            {ok, _, _} = epg_pool:query(Connection, "DROP TABLE " ++ ScheduleTable),
+            {ok, _, _} = epg_pool:query(Connection, "DROP TABLE " ++ TaskTable),
+            {ok, _, _} = epg_pool:query(Connection, "DROP TABLE " ++ ProcessesTable),
+            _ = epg_pool:query(Connection, "DROP TYPE task_type, task_status, process_status")
+        end
+    ),
+    ok.
 
 %-endif.
 
