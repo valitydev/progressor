@@ -20,10 +20,6 @@
 %% Internal API
 -export([reply/2]).
 
-%-ifdef(TEST).
--export([cleanup/1]).
-%-endif.
-
 -type request() :: #{
     ns := namespace_id(),
     id := id(),
@@ -145,23 +141,6 @@ health_check_namespace(NsId) ->
         ],
         #{ns => NsId}
     ).
-
-%-ifdef(TEST).
-
--spec cleanup(_) -> _.
-cleanup(Opts) ->
-    prg_utils:pipe(
-        [
-            fun add_ns_opts/1,
-            fun cleanup_storage/1
-        ],
-        Opts
-    ).
-
-cleanup_storage(#{ns := NsId, ns_opts := #{storage := StorageOpts}}) ->
-    ok = prg_storage:cleanup(StorageOpts, NsId).
-
-%-endif.
 
 %% Internal functions
 

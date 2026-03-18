@@ -37,9 +37,7 @@
 %% Init operations
 -export([db_init/2]).
 
-%-ifdef(TEST).
 -export([cleanup/2]).
-%-endif.
 
 %%%%%%%%%%%%%%%%%%%%%%%%
 %% API handler functions

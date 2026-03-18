@@ -11,7 +11,7 @@
   0},
  {<<"epg_migrator">>,
   {git,"https://github.com/valitydev/epg_migrator.git",
-       {ref,"200027d5163fbdc9ffe9cc83250fe9493fe10332"}},
+       {ref,"8633c43fb4d022355c1498c0effa9ecf4098a67f"}},
   0},
  {<<"epgsql">>,
   {git,"https://github.com/epgsql/epgsql.git",
