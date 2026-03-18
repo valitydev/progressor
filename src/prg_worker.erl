@@ -145,13 +145,19 @@ terminate(_Reason, #prg_worker_state{continuation = {{TaskType, _}, Task}} = Sta
 ->
     #prg_worker_state{
         ns_id = NsId,
-        ns_opts = #{storage := StorageOpts} = _NsOpts
+        ns_opts = #{storage := StorageOpts},
+        continuation = {_, #{task_id := TaskId}},
+        process = #{process_id := ProcessId}
     } = State,
-    try
-        prg_storage:reschedule_task(StorageOpts, NsId, Task)
+    try prg_storage:reschedule_task(StorageOpts, NsId, Task) of
+        ok ->
+            logger:warning("process ~p reschedule task ~p when terminate", [ProcessId, TaskId])
     catch
         Class:Term:Trace ->
-            logger:error("reschedule task error: ~p", [[Class, Term, Trace]])
+            logger:error(
+                "process ~p reschedule task ~p error: ~p",
+                [ProcessId, TaskId, {Class, Term, Trace}]
+            )
     end,
     ok;
 terminate(_Reason, #prg_worker_state{} = _State) ->
