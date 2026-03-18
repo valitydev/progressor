@@ -28,6 +28,7 @@
 -export([complete_and_error/4]).
 -export([remove_process/3]).
 -export([capture_task/3]).
+-export([reschedule_task/3]).
 
 %% shared functions
 -export([get_task/4]).
@@ -371,6 +372,26 @@ capture_task(PgOpts, NsId, TaskId) ->
         ),
     to_maps(Columns, Rows, fun marshal_task/1).
 
+-spec reschedule_task(pg_opts(), namespace_id(), task()) -> ok | no_return().
+reschedule_task(PgOpts, NsId, #{task_id := TaskId} = Task) ->
+    Pool = get_pool(internal, PgOpts),
+    #{
+        schedule := ScheduleTable,
+        running := RunningTable
+    } = prg_pg_utils:tables(NsId),
+    ScheduledTask = maps:merge(
+        maps:without([running_time], Task),
+        #{status => <<"waiting">>}
+    ),
+    epg_pool:transaction(
+        Pool,
+        fun(Connection) ->
+            {ok, _} = do_delete_running(Connection, RunningTable, TaskId),
+            {ok, _, _, _} = do_save_schedule(Connection, ScheduleTable, ScheduledTask)
+        end
+    ),
+    ok.
+
 -spec search_calls(pg_opts(), namespace_id(), pos_integer()) -> [task()].
 search_calls(PgOpts, NsId, Limit) ->
     Pool = get_pool(scan, PgOpts),
@@ -682,13 +703,45 @@ complete_and_unlock(PgOpts, NsId, TaskResult, ProcessUpdates, Events) ->
 
 -spec db_init(pg_opts(), namespace_id()) -> ok.
 db_init(PgOpts, NsId) ->
-    prg_pg_migration:db_init(PgOpts, NsId).
+    Pool = get_pool(internal, PgOpts),
+    {ok, Pools} = application:get_env(epg_connector, pools),
+    {ok, Databases} = application:get_env(epg_connector, databases),
+    #{database := DbRef} = maps:get(Pool, Pools),
+    DbOpts = maps:get(DbRef, Databases),
+
+    PrivDir = code:priv_dir(progressor),
+    MigrationsDir = filename:join([PrivDir, "migrations"]),
+    MigrationOpts = [{namespace, NsId}],
+    Realm = erlang:atom_to_binary(NsId),
+
+    {ok, _} = epg_migrator:perform(Realm, DbOpts, MigrationOpts, MigrationsDir),
+    ok.
 
 %-ifdef(TEST).
 
 -spec cleanup(_, _) -> _.
 cleanup(PgOpts, NsId) ->
-    prg_pg_migration:cleanup(PgOpts, NsId).
+    Pool = get_pool(internal, PgOpts),
+    #{
+        processes := ProcessesTable,
+        tasks := TaskTable,
+        schedule := ScheduleTable,
+        running := RunningTable,
+        events := EventsTable
+    } = prg_pg_utils:tables(NsId),
+    epg_pool:transaction(
+        Pool,
+        fun(Connection) ->
+            {ok, _, _} = epg_pool:query(Connection, "ALTER TABLE " ++ ProcessesTable ++ " DROP COLUMN corrupted_by"),
+            {ok, _, _} = epg_pool:query(Connection, "DROP TABLE " ++ EventsTable),
+            {ok, _, _} = epg_pool:query(Connection, "DROP TABLE " ++ RunningTable),
+            {ok, _, _} = epg_pool:query(Connection, "DROP TABLE " ++ ScheduleTable),
+            {ok, _, _} = epg_pool:query(Connection, "DROP TABLE " ++ TaskTable),
+            {ok, _, _} = epg_pool:query(Connection, "DROP TABLE " ++ ProcessesTable),
+            _ = epg_pool:query(Connection, "DROP TYPE task_type, task_status, process_status")
+        end
+    ),
+    ok.
 
 %-endif.
 
@@ -869,6 +922,13 @@ do_save_running(Connection, Table, Task, Returning) ->
             AttemptsCount,
             Context
         ]
+    ).
+
+do_delete_running(Connection, Table, TaskId) ->
+    epg_pool:query(
+        Connection,
+        "DELETE FROM " ++ Table ++ " WHERE task_id = $1",
+        [TaskId]
     ).
 
 do_save_schedule(Connection, Table, Task) ->
