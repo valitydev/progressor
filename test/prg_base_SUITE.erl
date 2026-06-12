@@ -39,8 +39,8 @@
 
 -define(NS(C), proplists:get_value(ns_id, C, 'default/default')).
 -define(AWAIT_TIMEOUT(C), proplists:get_value(repl_timeout, C, 5)).
--define(TIMEOUT_IN(Sec), {schedule, #{at => erlang:system_time(second) + (Sec), action => timeout}}).
--define(REMOVE_IN(Sec), {schedule, #{at => erlang:system_time(second) + (Sec), action => remove}}).
+-define(TIMEOUT_IN(Sec), {schedule, #{at => erlang:system_time(microsecond) + (Sec) * 1000000, action => timeout}}).
+-define(REMOVE_IN(Sec), {schedule, #{at => erlang:system_time(microsecond) + (Sec) * 1000000, action => remove}}).
 
 init_per_suite(Config) ->
     Config.

@@ -193,7 +193,8 @@
 -type scheduled_action() :: timeout | remove.
 
 -type schedule() :: #{
-    at := timestamp_sec(),
+    %% Absolute unix time; unit is auto-detected on write (prg_utils:to_microseconds).
+    at := timestamp_us(),
     action := scheduled_action()
 }.
 

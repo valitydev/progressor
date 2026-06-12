@@ -48,7 +48,7 @@
 -type scheduled_action() :: timeout | remove.
 
 -type schedule() :: #{
-    at := timestamp_sec(),           %% абсолютный unix sec
+    at := timestamp_us(),            %% абсолютный unix us
     action := scheduled_action()     %% вид отложенной задачи
 }.
 
@@ -65,11 +65,11 @@ Wire-значения пишутся в intent как есть, без helper-м
 
 ```erlang
 idle | suspend | timeout | remove
-{schedule, #{at := UnixSec, action := timeout | remove}}
+{schedule, #{at := UnixUs, action := timeout | remove}}
 ```
 
-`at` — всегда абсолютный unix sec; относительное время — `erlang:system_time(second) + N`
-на стороне автора.
+`at` — абсолютный unix us; относительное время — `erlang:system_time(microsecond) + N * 1000000`
+на стороне автора. `prg_utils:to_microseconds/1` на входе runtime по-прежнему принимает sec/ms/us.
 
 ### Таблица dispatch (единственный источник правды в runtime)
 
@@ -125,7 +125,7 @@ idle | suspend | timeout | remove
 
 - таблицу dispatch выше;
 - top-level `timeout` = instant continue (не путать с `task_type`);
-- `at` в schedule — только абсолютный unix sec;
+- `at` в schedule — абсолютный unix us;
 - **breaking change**: tag `vX.Y.0`, старые map/atom в intent не поддерживаются;
 - список файлов progressor с legacy (grep: `set_timer`, `unset_timer`, `#{remove`).
 

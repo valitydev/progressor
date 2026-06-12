@@ -521,7 +521,7 @@ action_to_task(remove, _ProcessId, _Ctx) ->
     undefined;
 action_to_task(timeout, ProcessId, Context) ->
     action_to_task(
-        {schedule, #{at => erlang:system_time(second), action => timeout}},
+        {schedule, #{at => erlang:system_time(microsecond), action => timeout}},
         ProcessId,
         Context
     );

@@ -240,7 +240,7 @@ dispatch_action(remove, Intent, TaskHeader, Task, Deadline, State) ->
     success_and_remove(Intent, TaskHeader, Task, Deadline, State);
 dispatch_action(timeout, Intent, TaskHeader, Task, Deadline, State) ->
     success_and_continue(
-        Intent, TaskHeader, Task, Deadline, State, timeout, erlang:system_time(second)
+        Intent, TaskHeader, Task, Deadline, State, timeout, erlang:system_time(microsecond)
     );
 dispatch_action({schedule, #{at := Timestamp0, action := Action}}, Intent, TaskHeader, Task, Deadline, State) ->
     success_and_continue(Intent, TaskHeader, Task, Deadline, State, Action, Timestamp0).
@@ -722,12 +722,9 @@ is_retryable(Error, {timeout, undefined}, RetryPolicy, Timeout, Attempts) ->
 is_retryable(_Error, _TaskHeader, _RetryPolicy, _Timeout, _Attempts) ->
     false.
 
-%% Due to the difference in the time scales used for storage (microseconds)
-%% and the schedule time (seconds), the following logic is required:
-%% - If the difference between the schedule and the current time is less than a ~1 second
-%%   the task is assigned the status "running" and is processed immediately
-%% - If the difference between the schedule and the current time exceeds ~1 second
-%%   the task is assigned the status "waiting" and is saved to the schedule
+%% Sub-second schedules are coerced to immediate execution: if the gap to
+%% `scheduled_time` is below ~1s (scheduler overhead), the task stays `running`
+%% instead of `waiting`.
 create_status(Timestamp, Now) when Timestamp =< Now ->
     <<"running">>;
 create_status(Timestamp, Now) ->
