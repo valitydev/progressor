@@ -50,7 +50,10 @@
     process_id := id(),
     task_id := task_id(),
     event_id := event_id(),
-    timestamp := timestamp_sec(),
+    %% Stored as timestamptz with microsecond precision; the unit is auto-detected
+    %% (prg_utils:split_timestamp/to_microseconds), so both seconds and microseconds
+    %% are accepted on write.
+    timestamp := timestamp_us(),
     metadata => #{format => pos_integer()},
     payload := binary()
 }.
