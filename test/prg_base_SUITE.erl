@@ -39,6 +39,8 @@
 
 -define(NS(C), proplists:get_value(ns_id, C, 'default/default')).
 -define(AWAIT_TIMEOUT(C), proplists:get_value(repl_timeout, C, 5)).
+-define(TIMEOUT_IN(Sec), {schedule, #{at => erlang:system_time(second) + (Sec), action => timeout}}).
+-define(REMOVE_IN(Sec), {schedule, #{at => erlang:system_time(second) + (Sec), action => remove}}).
 
 init_per_suite(Config) ->
     Config.
@@ -844,7 +846,7 @@ put_process_with_timeout_test(C) ->
             status => <<"running">>,
             history => [event(1)]
         },
-        action => #{set_timer => erlang:system_time(microsecond) + 1000000}
+        action => ?TIMEOUT_IN(1)
     },
     {ok, ok} = progressor:put(#{ns => ?NS(C), id => Id, args => Args}),
     timer:sleep(?AWAIT_TIMEOUT(C)),
@@ -942,7 +944,7 @@ put_process_with_remove_test(C) ->
             status => <<"running">>,
             history => [event(1)]
         },
-        action => #{set_timer => erlang:system_time(microsecond) + 1000000, remove => true}
+        action => ?REMOVE_IN(1)
     },
     {ok, ok} = progressor:put(#{ns => ?NS(C), id => Id, args => Args}),
     timer:sleep(?AWAIT_TIMEOUT(C)),
@@ -987,7 +989,7 @@ mock_processor(simple_timers_test = TestCase) ->
                     events => [event(1)],
                     metadata => #{<<"k">> => <<"v">>},
                     %% postponed timer
-                    action => #{set_timer => erlang:system_time(microsecond) + 2000000},
+                    action => ?TIMEOUT_IN(2),
                     aux_state => erlang:term_to_binary(<<"aux_state1">>)
                 },
                 Self ! 1,
@@ -996,7 +998,7 @@ mock_processor(simple_timers_test = TestCase) ->
                 Result = #{
                     events => [event(2)],
                     %% continuation timer
-                    action => #{set_timer => erlang:system_time(microsecond)},
+                    action => timeout,
                     aux_state => erlang:term_to_binary(<<"aux_state2">>)
                 },
                 Self ! 2,
@@ -1017,7 +1019,7 @@ mock_processor(simple_call_test = TestCase) ->
         ({init, <<"init_args">>, _Process}, _Opts, _Ctx) ->
             Result = #{
                 events => [event(1)],
-                action => #{set_timer => erlang:system_time(microsecond) + 2000000}
+                action => ?TIMEOUT_IN(2)
             },
             Self ! 1,
             {ok, Result};
@@ -1047,7 +1049,7 @@ mock_processor(reschedule_after_call_test = TestCase) ->
         ({init, <<"init_args">>, _Process}, _Opts, _Ctx) ->
             Result = #{
                 events => [event(1)],
-                action => #{set_timer => erlang:system_time(microsecond) + 2000000}
+                action => ?TIMEOUT_IN(2)
             },
             Self ! 1,
             {ok, Result};
@@ -1106,7 +1108,7 @@ mock_processor(simple_call_with_range_test = TestCase) ->
             Result = #{
                 response => <<"response">>,
                 events => [event(6)],
-                action => #{set_timer => erlang:system_time(microsecond)}
+                action => timeout
             },
             Self ! 3,
             {ok, Result};
@@ -1127,7 +1129,7 @@ mock_processor(call_replace_timer_test = TestCase) ->
         ({init, <<"init_args">>, _Process}, _Opts, _Ctx) ->
             Result = #{
                 events => [event(1)],
-                action => #{set_timer => erlang:system_time(microsecond) + 2000000, remove => true}
+                action => ?REMOVE_IN(2)
             },
             Self ! 1,
             {ok, Result};
@@ -1136,7 +1138,7 @@ mock_processor(call_replace_timer_test = TestCase) ->
             Result = #{
                 response => <<"response">>,
                 events => [event(2), event(3)],
-                action => #{set_timer => erlang:system_time(microsecond)}
+                action => timeout
             },
             Self ! 2,
             {ok, Result};
@@ -1157,7 +1159,7 @@ mock_processor(call_unset_timer_test = TestCase) ->
         ({init, <<"init_args">>, _Process}, _Opts, _Ctx) ->
             Result = #{
                 events => [event(1)],
-                action => #{set_timer => erlang:system_time(microsecond) + 2000000}
+                action => ?TIMEOUT_IN(2)
             },
             Self ! 1,
             {ok, Result};
@@ -1166,7 +1168,7 @@ mock_processor(call_unset_timer_test = TestCase) ->
             Result = #{
                 response => <<"response">>,
                 events => [],
-                action => unset_timer
+                action => suspend
             },
             Self ! 2,
             {ok, Result};
@@ -1187,7 +1189,7 @@ mock_processor(postponed_call_test = TestCase) ->
         ({init, <<"init_args">>, _Process}, _Opts, _Ctx) ->
             Result = #{
                 events => [],
-                action => #{set_timer => erlang:system_time(microsecond)}
+                action => timeout
             },
             Self ! 1,
             {ok, Result};
@@ -1195,7 +1197,7 @@ mock_processor(postponed_call_test = TestCase) ->
             timer:sleep(3000),
             Result = #{
                 events => [event(1)],
-                action => #{set_timer => erlang:system_time(microsecond)}
+                action => timeout
             },
             Self ! 2,
             {ok, Result};
@@ -1223,7 +1225,7 @@ mock_processor(postponed_call_to_suspended_process_test = TestCase) ->
         ({init, <<"init_args">>, _Process}, _Opts, _Ctx) ->
             Result = #{
                 events => [],
-                action => #{set_timer => erlang:system_time(microsecond)}
+                action => timeout
             },
             Self ! 1,
             {ok, Result};
@@ -1271,7 +1273,7 @@ mock_processor(simple_repair_after_non_retriable_error_test = TestCase) ->
         ({init, <<"init_args">>, _Process}, _Opts, _Ctx) ->
             Result = #{
                 events => [],
-                action => #{set_timer => erlang:system_time(microsecond)}
+                action => timeout
             },
             Self ! 1,
             {ok, Result};
@@ -1282,7 +1284,7 @@ mock_processor(simple_repair_after_non_retriable_error_test = TestCase) ->
             %% timeout via simple repair
             Result = #{
                 events => [event(1)],
-                action => #{set_timer => erlang:system_time(microsecond)}
+                action => timeout
             },
             Self ! 3,
             {ok, Result};
@@ -1302,7 +1304,7 @@ mock_processor(repair_after_non_retriable_error_test = TestCase) ->
         ({init, <<"init_args">>, _Process}, _Opts, _Ctx) ->
             Result = #{
                 events => [],
-                action => #{set_timer => erlang:system_time(microsecond)}
+                action => timeout
             },
             Self ! 1,
             {ok, Result};
@@ -1331,7 +1333,7 @@ mock_processor(error_after_max_retries_test = TestCase) ->
         ({init, <<"init_args">>, _Process}, _Opts, _Ctx) ->
             Result = #{
                 events => [],
-                action => #{set_timer => erlang:system_time(microsecond)}
+                action => timeout
             },
             Self ! 1,
             {ok, Result};
@@ -1391,7 +1393,7 @@ mock_processor(remove_by_timer_test = TestCase) ->
     MockProcessor = fun({init, <<"init_args">>, _Process}, _Opts, _Ctx) ->
         Result = #{
             events => [event(1), event(2)],
-            action => #{set_timer => erlang:system_time(microsecond) + 2000000, remove => true}
+            action => ?REMOVE_IN(2)
         },
         {ok, Result}
     end,
@@ -1403,14 +1405,14 @@ mock_processor(remove_without_timer_test = TestCase) ->
         ({init, <<"init_args">>, _Process}, _Opts, _Ctx) ->
             Result = #{
                 events => [event(1)],
-                action => #{set_timer => erlang:system_time(microsecond) + 2000000}
+                action => ?TIMEOUT_IN(2)
             },
             Self ! 1,
             {ok, Result};
         ({timeout, <<>>, _Process}, _Opts, _Ctx) ->
             Result = #{
                 events => [],
-                action => #{remove => true}
+                action => remove
             },
             Self ! 2,
             {ok, Result}

@@ -7,19 +7,17 @@ process({init, Args, _Process}, _Opts, _Ctx) ->
     Result = #{
         metadata => #{finish => Fin},
         events => [event(1)],
-        action => #{set_timer => erlang:system_time(second)}
+        action => timeout
     },
     {ok, Result};
 %%
 process({timeout, _Args, #{history := History, metadata := Meta} = _Process}, _Opts, _Ctx) ->
-    %Random = rand:uniform(40),
-    %timer:sleep(60 + Random),
     #{finish := FinishTime} = Meta,
-    Action = case FinishTime > erlang:system_time(second) of
-        true -> #{set_timer => erlang:system_time(second)};
-        false -> unset_timer
-    end,
-    %Action = #{set_timer => erlang:system_time(second)},
+    Action =
+        case FinishTime > erlang:system_time(second) of
+            true -> timeout;
+            false -> suspend
+        end,
     NextId = erlang:length(History) + 1,
     Result = #{
         events => [event(NextId)],
@@ -31,7 +29,7 @@ process({call, _Args, #{history := History} = _Process}, _Opts, _Ctx) ->
     Result = #{
         response => erlang:length(History),
         events => [],
-        action => unset_timer
+        action => suspend
     },
     {ok, Result}.
 %%

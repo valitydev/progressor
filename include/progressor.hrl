@@ -157,7 +157,7 @@
 
 -type processor_intent() :: #{
     events := [event()],
-    action => action() | undefined,
+    action => action(), %% отсутствие ключа = idle
     response => term(),
     aux_state => binary(),
     metadata => map()
@@ -186,15 +186,18 @@
 %%   (i.e., attempts are not exhausted, and the error is not marked as
 %%   non-retryable).
 
--type set_timer_action() :: #{set_timer := timestamp_sec()}.
--type remove_action() :: #{remove := true}.
--type scheduled_remove_action() :: #{set_timer := timestamp_sec(), remove := true}.
-%% Mutually exclusive processor step actions (at most one per intent).
+-type scheduled_action() :: timeout | remove.
+
+-type schedule() :: #{
+    at := timestamp_sec(),
+    action := scheduled_action()
+}.
+
 -type action() ::
-    set_timer_action()
-    | scheduled_remove_action()
-    | remove_action()
-    | unset_timer.
+    idle
+    | suspend
+    | scheduled_action()
+    | {schedule, schedule()}.
 
 -type task_result() :: #{
     task_id := task_id(),

@@ -229,17 +229,21 @@ maybe_restore_history(_, State) ->
     State.
 
 handle_result_success(Intent, TaskHeader, Task, Deadline, State) ->
-    Action = maps:get(action, Intent, undefined),
-    case Action of
-        #{set_timer := _Timestamp} ->
-            success_and_continue(Intent, TaskHeader, Task, Deadline, State);
-        #{remove := true} ->
-            success_and_remove(Intent, TaskHeader, Task, Deadline, State);
-        unset_timer ->
-            success_and_suspend(Intent, TaskHeader, Task, Deadline, State);
-        undefined ->
-            success_and_unlock(Intent, TaskHeader, Task, Deadline, State)
-    end.
+    Action = maps:get(action, Intent, idle),
+    dispatch_action(Action, Intent, TaskHeader, Task, Deadline, State).
+
+dispatch_action(idle, Intent, TaskHeader, Task, Deadline, State) ->
+    success_and_unlock(Intent, TaskHeader, Task, Deadline, State);
+dispatch_action(suspend, Intent, TaskHeader, Task, Deadline, State) ->
+    success_and_suspend(Intent, TaskHeader, Task, Deadline, State);
+dispatch_action(remove, Intent, TaskHeader, Task, Deadline, State) ->
+    success_and_remove(Intent, TaskHeader, Task, Deadline, State);
+dispatch_action(timeout, Intent, TaskHeader, Task, Deadline, State) ->
+    success_and_continue(
+        Intent, TaskHeader, Task, Deadline, State, timeout, erlang:system_time(second)
+    );
+dispatch_action({schedule, #{at := Timestamp0, action := Action}}, Intent, TaskHeader, Task, Deadline, State) ->
+    success_and_continue(Intent, TaskHeader, Task, Deadline, State, Action, Timestamp0).
 
 handle_result_error(Result, {TaskType, _} = TaskHeader, Task, Deadline, State) when
     TaskType =:= timeout;
@@ -253,8 +257,8 @@ handle_result_error(Result, {TaskType, _} = TaskHeader, Task, Deadline, State) w
 ->
     error_and_stop(Result, TaskHeader, Task, Deadline, State).
 
-success_and_continue(Intent, TaskHeader, Task, Deadline, State) ->
-    #{action := #{set_timer := Timestamp0} = Action, events := Events} = Intent,
+success_and_continue(Intent, TaskHeader, Task, Deadline, State, Action, Timestamp0) ->
+    #{events := Events} = Intent,
     #{context := Context} = Task,
     #prg_worker_state{
         ns_id = NsId,
@@ -323,7 +327,7 @@ success_and_remove(Intent, TaskHeader, _Task, Deadline, State) ->
     State#prg_worker_state{process = undefined}.
 
 success_and_suspend(Intent, TaskHeader, Task, Deadline, State) ->
-    #{events := Events, action := unset_timer} = Intent,
+    #{events := Events} = Intent,
     #prg_worker_state{
         ns_id = NsId,
         ns_opts = #{storage := StorageOpts} = NsOpts,
@@ -747,10 +751,10 @@ create_header(#{task_type := <<"repair">>}) ->
 create_header(#{task_type := <<"notify">>}) ->
     {notify, undefined}.
 %%
-action_to_task_type(#{remove := true}) ->
-    <<"remove">>;
-action_to_task_type(#{set_timer := _}) ->
-    <<"timeout">>.
+action_to_task_type(timeout) ->
+    <<"timeout">>;
+action_to_task_type(remove) ->
+    <<"remove">>.
 
 last_event_id([]) ->
     0;
