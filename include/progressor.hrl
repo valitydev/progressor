@@ -157,7 +157,8 @@
 
 -type processor_intent() :: #{
     events := [event()],
-    action => action(), %% отсутствие ключа = idle
+    %% отсутствие ключа = idle
+    action => action(),
     response => term(),
     aux_state => binary(),
     metadata => map()

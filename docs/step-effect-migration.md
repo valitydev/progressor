@@ -4,7 +4,7 @@
 `unset_timer`, пересечение ключей map) **изнутри runtime** и оставить только явную
 алгебру `action()` из `progressor.hrl`.
 
-Связанный план для hellgate: `hellgate/docs/step-effect-hg-migration.md` (wire `action()`, адаптер в HG).
+Связанный документ для hellgate: `hellgate/docs/prg-machine.md`.
 
 ---
 
@@ -105,7 +105,7 @@ idle | suspend | timeout | remove
 ```
 ┌──────────────────────────────────────┐
 │  hellgate / ff / кастомный процессор │  доменная логика
-│  hg_machine_action (опционально)     │  legacy MG → action() ТОЛЬКО здесь
+│  prg_action (hellgate, опционально)  │  timer tuple → action(); MG/repair — граница
 └──────────────┬───────────────────────┘
                │  processor_intent.action :: action()
 ┌──────────────▼───────────────────────┐
@@ -177,7 +177,7 @@ idle | suspend | timeout | remove
 1. CHANGELOG: breaking — формат `processor_intent.action`.
 2. Migration guide **для внешних авторов**: таблица legacy → `action()` (в доке hellgate).
 3. Tag `vX.Y.0`.
-4. Hellgate: bump tag, адаптер в `prg_machine` / `hg_machine_action`, затем домены.
+4. Hellgate: bump tag, `prg_action` + wire в доменах (миграция завершена, см. hellgate `docs/prg-machine.md`).
 
 **Критерий:** progressor tag опубликован; hellgate компилируется со своим адаптером.
 
@@ -212,4 +212,4 @@ idle | suspend | timeout | remove
 - [x] grep `set_timer|unset_timer` в `src/` и `test/` — пусто
 - [x] CT зелёный (`make wdeps-test`)
 - [ ] CHANGELOG + tag
-- [ ] hellgate на отдельном треке с адаптером на своей границе
+- [x] hellgate: wire `action()`, `prg_action`, CI green (до tag bump)
