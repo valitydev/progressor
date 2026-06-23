@@ -229,17 +229,21 @@ maybe_restore_history(_, State) ->
     State.
 
 handle_result_success(Intent, TaskHeader, Task, Deadline, State) ->
-    Action = maps:get(action, Intent, undefined),
-    case Action of
-        #{set_timer := _Timestamp} ->
-            success_and_continue(Intent, TaskHeader, Task, Deadline, State);
-        #{remove := true} ->
-            success_and_remove(Intent, TaskHeader, Task, Deadline, State);
-        unset_timer ->
-            success_and_suspend(Intent, TaskHeader, Task, Deadline, State);
-        undefined ->
-            success_and_unlock(Intent, TaskHeader, Task, Deadline, State)
-    end.
+    Action = maps:get(action, Intent, idle),
+    dispatch_action(Action, Intent, TaskHeader, Task, Deadline, State).
+
+dispatch_action(idle, Intent, TaskHeader, Task, Deadline, State) ->
+    success_and_unlock(Intent, TaskHeader, Task, Deadline, State);
+dispatch_action(suspend, Intent, TaskHeader, Task, Deadline, State) ->
+    success_and_suspend(Intent, TaskHeader, Task, Deadline, State);
+dispatch_action(remove, Intent, TaskHeader, Task, Deadline, State) ->
+    success_and_remove(Intent, TaskHeader, Task, Deadline, State);
+dispatch_action(timeout, Intent, TaskHeader, Task, Deadline, State) ->
+    success_and_continue(
+        Intent, TaskHeader, Task, Deadline, State, timeout, erlang:system_time(microsecond)
+    );
+dispatch_action({schedule, #{at := Timestamp0, action := Action}}, Intent, TaskHeader, Task, Deadline, State) ->
+    success_and_continue(Intent, TaskHeader, Task, Deadline, State, Action, Timestamp0).
 
 handle_result_error(Result, {TaskType, _} = TaskHeader, Task, Deadline, State) when
     TaskType =:= timeout;
@@ -253,8 +257,8 @@ handle_result_error(Result, {TaskType, _} = TaskHeader, Task, Deadline, State) w
 ->
     error_and_stop(Result, TaskHeader, Task, Deadline, State).
 
-success_and_continue(Intent, TaskHeader, Task, Deadline, State) ->
-    #{action := #{set_timer := Timestamp0} = Action, events := Events} = Intent,
+success_and_continue(Intent, TaskHeader, Task, Deadline, State, Action, Timestamp0) ->
+    #{events := Events} = Intent,
     #{context := Context} = Task,
     #prg_worker_state{
         ns_id = NsId,
@@ -269,7 +273,7 @@ success_and_continue(Intent, TaskHeader, Task, Deadline, State) ->
     TaskResult = task_result(Task, <<"finished">>, Response),
     NewTask = #{
         process_id => ProcessId,
-        task_type => action_to_task_type(Action),
+        task_type => prg_utils:action_to_task_type(Action),
         status => create_status(Timestamp, Now),
         scheduled_time => Timestamp,
         context => Context,
@@ -323,7 +327,7 @@ success_and_remove(Intent, TaskHeader, _Task, Deadline, State) ->
     State#prg_worker_state{process = undefined}.
 
 success_and_suspend(Intent, TaskHeader, Task, Deadline, State) ->
-    #{events := Events, action := unset_timer} = Intent,
+    #{events := Events} = Intent,
     #prg_worker_state{
         ns_id = NsId,
         ns_opts = #{storage := StorageOpts} = NsOpts,
@@ -718,12 +722,9 @@ is_retryable(Error, {timeout, undefined}, RetryPolicy, Timeout, Attempts) ->
 is_retryable(_Error, _TaskHeader, _RetryPolicy, _Timeout, _Attempts) ->
     false.
 
-%% Due to the difference in the time scales used for storage (microseconds)
-%% and the schedule time (seconds), the following logic is required:
-%% - If the difference between the schedule and the current time is less than a ~1 second
-%%   the task is assigned the status "running" and is processed immediately
-%% - If the difference between the schedule and the current time exceeds ~1 second
-%%   the task is assigned the status "waiting" and is saved to the schedule
+%% Sub-second schedules are coerced to immediate execution: if the gap to
+%% `scheduled_time` is below ~1s (scheduler overhead), the task stays `running`
+%% instead of `waiting`.
 create_status(Timestamp, Now) when Timestamp =< Now ->
     <<"running">>;
 create_status(Timestamp, Now) ->
@@ -746,11 +747,6 @@ create_header(#{task_type := <<"repair">>}) ->
     {repair, undefined};
 create_header(#{task_type := <<"notify">>}) ->
     {notify, undefined}.
-%%
-action_to_task_type(#{remove := true}) ->
-    <<"remove">>;
-action_to_task_type(#{set_timer := _}) ->
-    <<"timeout">>.
 
 last_event_id([]) ->
     0;

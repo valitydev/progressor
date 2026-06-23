@@ -13,7 +13,7 @@ process({_, _, #{history := History} = _Process}, _Opts, _Ctx) ->
         Count ->
             Result = #{
                 events => [event(Count + 1)],
-                action => #{set_timer => erlang:system_time(second)}
+                action => timeout
             },
             {ok, Result}
     end.

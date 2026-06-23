@@ -147,7 +147,7 @@ progressor:put(#{
             status => <<"running">>,
             aux_state => <<"state_data">>
         },
-        action => #{set_timer => 1640995200}
+        action => {schedule, #{at => 1640995200000000, action => timeout}}
     }
 }).
 ```
@@ -277,8 +277,8 @@ process({TaskType, Args, Process}, Options, Context) ->
     % Опционально установить таймер
     case should_set_timer(Process, TaskType) of
         true ->
-            TimerTime = erlang:system_time(second) + 60,
-            {ok, Result#{action => #{set_timer => TimerTime}}};
+            TimerTime = erlang:system_time(microsecond) + 60 * 1000000,
+            {ok, Result#{action => {schedule, #{at => TimerTime, action => timeout}}}};
         false ->
             {ok, Result}
     end.

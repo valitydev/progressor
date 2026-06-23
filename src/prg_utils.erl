@@ -18,6 +18,7 @@
 -export([to_seconds/1]).
 -export([split_timestamp/1]).
 -export([format_microseconds/1]).
+-export([action_to_task_type/1]).
 
 -type time_unit() :: second | millisecond | microsecond.
 
@@ -141,3 +142,9 @@ format_microseconds(Val) ->
     Bin = integer_to_binary(Val),
     Pad = 6 - byte_size(Bin),
     <<(binary:copy(<<"0">>, Pad))/binary, Bin/binary>>.
+
+-spec action_to_task_type(scheduled_action()) -> task_type().
+action_to_task_type(timeout) ->
+    <<"timeout">>;
+action_to_task_type(remove) ->
+    <<"remove">>.

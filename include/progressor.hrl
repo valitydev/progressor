@@ -50,7 +50,10 @@
     process_id := id(),
     task_id := task_id(),
     event_id := event_id(),
-    timestamp := timestamp_sec(),
+    %% Stored as timestamptz with microsecond precision; the unit is auto-detected
+    %% (prg_utils:split_timestamp/to_microseconds), so both seconds and microseconds
+    %% are accepted on write.
+    timestamp := timestamp_us(),
     metadata => #{format => pos_integer()},
     payload := binary()
 }.
@@ -157,6 +160,7 @@
 
 -type processor_intent() :: #{
     events := [event()],
+    %% отсутствие ключа = idle
     action => action(),
     response => term(),
     aux_state => binary(),
@@ -186,7 +190,19 @@
 %%   (i.e., attempts are not exhausted, and the error is not marked as
 %%   non-retryable).
 
--type action() :: #{set_timer := timestamp_sec(), remove => true} | unset_timer.
+-type scheduled_action() :: timeout | remove.
+
+-type schedule() :: #{
+    %% Absolute unix time; unit is auto-detected on write (prg_utils:to_microseconds).
+    at := timestamp_us(),
+    action := scheduled_action()
+}.
+
+-type action() ::
+    idle
+    | suspend
+    | scheduled_action()
+    | {schedule, schedule()}.
 
 -type task_result() :: #{
     task_id := task_id(),

@@ -373,7 +373,7 @@ do_put(
     #{
         process_id := ProcessId
     } = Process,
-    Action = maps:get(action, Args, undefined),
+    Action = maps:get(action, Args, idle),
     Context = maps:get(context, Opts, <<>>),
     Now = erlang:system_time(microsecond),
     InitTask = #{
@@ -513,23 +513,26 @@ check_for_run(undefined) ->
 check_for_run(Pid) when is_pid(Pid) ->
     <<"running">>.
 
-action_to_task(undefined, _ProcessId, _Ctx) ->
+action_to_task(idle, _ProcessId, _Ctx) ->
     undefined;
-action_to_task(unset_timer, _ProcessId, _Ctx) ->
+action_to_task(suspend, _ProcessId, _Ctx) ->
     undefined;
-action_to_task(#{set_timer := Timestamp} = Action, ProcessId, Context) ->
-    TaskType =
-        case maps:get(remove, Action, false) of
-            true -> <<"remove">>;
-            false -> <<"timeout">>
-        end,
+action_to_task(remove, _ProcessId, _Ctx) ->
+    undefined;
+action_to_task(timeout, ProcessId, Context) ->
+    action_to_task(
+        {schedule, #{at => erlang:system_time(microsecond), action => timeout}},
+        ProcessId,
+        Context
+    );
+action_to_task({schedule, #{at := Timestamp0, action := Action}}, ProcessId, Context) ->
     #{
         process_id => ProcessId,
-        task_type => TaskType,
+        task_type => prg_utils:action_to_task_type(Action),
         status => <<"waiting">>,
         args => <<>>,
         context => Context,
-        scheduled_time => prg_utils:to_microseconds(Timestamp),
+        scheduled_time => prg_utils:to_microseconds(Timestamp0),
         last_retry_interval => 0,
         attempts_count => 0
     }.
