@@ -528,7 +528,7 @@ action_to_task(timeout, ProcessId, Context) ->
 action_to_task({schedule, #{at := Timestamp0, action := Action}}, ProcessId, Context) ->
     #{
         process_id => ProcessId,
-        task_type => action_to_task_type(Action),
+        task_type => prg_utils:action_to_task_type(Action),
         status => <<"waiting">>,
         args => <<>>,
         context => Context,
@@ -536,11 +536,6 @@ action_to_task({schedule, #{at := Timestamp0, action := Action}}, ProcessId, Con
         last_retry_interval => 0,
         attempts_count => 0
     }.
-
-action_to_task_type(timeout) ->
-    <<"timeout">>;
-action_to_task_type(remove) ->
-    <<"remove">>.
 
 maybe_add_key(undefined, _Key, Map) ->
     Map;

@@ -273,7 +273,7 @@ success_and_continue(Intent, TaskHeader, Task, Deadline, State, Action, Timestam
     TaskResult = task_result(Task, <<"finished">>, Response),
     NewTask = #{
         process_id => ProcessId,
-        task_type => action_to_task_type(Action),
+        task_type => prg_utils:action_to_task_type(Action),
         status => create_status(Timestamp, Now),
         scheduled_time => Timestamp,
         context => Context,
@@ -747,11 +747,6 @@ create_header(#{task_type := <<"repair">>}) ->
     {repair, undefined};
 create_header(#{task_type := <<"notify">>}) ->
     {notify, undefined}.
-%%
-action_to_task_type(timeout) ->
-    <<"timeout">>;
-action_to_task_type(remove) ->
-    <<"remove">>.
 
 last_event_id([]) ->
     0;
