@@ -350,7 +350,7 @@ capture_task(PgOpts, NsId, TaskId) ->
                 epg_pool:query(
                     Connection,
                     "WITH current_task AS (SELECT * FROM " ++ ScheduleTable ++
-                        " WHERE task_id = $2 FOR UPDATE), "
+                        " WHERE task_id = $2 AND status = 'waiting' FOR UPDATE), "
                         "deleted_from_schedule AS ("
                         "  DELETE FROM " ++ ScheduleTable ++
                         " WHERE task_id = $2 AND status = 'waiting' "
