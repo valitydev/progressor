@@ -41,6 +41,7 @@
 -define(COMPLETION_KEY, progressor_task_completion_duration_ms).
 -define(REMOVING_KEY, progressor_process_removing_duration_ms).
 -define(NOTIFICATION_KEY, progressor_notification_duration_ms).
+-define(DEFENSE_INTERVAL_MS, 50).
 
 -dialyzer({nowarn_function, do_with_retry/2}).
 %% API
@@ -48,10 +49,13 @@
 %% processor wrapper
 -spec process(pid(), timestamp_ms(), namespace_opts(), request(), context()) ->
     {ok, _Result} | {error, _Reason} | no_return().
-process(Pid, Deadline, #{namespace := NS} = NsOpts, {TaskType, _, _} = Request, Context) ->
+process(Pid, Deadline, #{namespace := NS} = NsOpts0, {TaskType, _, _} = Request, Context) ->
     Timeout = Deadline - erlang:system_time(millisecond),
+    NsOpts = add_handling_timeout(Timeout, NsOpts0),
+    %% Defense is needed to avoid race conditions with the processor
+    TimeoutWithDefense = Timeout + ?DEFENSE_INTERVAL_MS,
     Fun = fun() ->
-        gen_server:call(Pid, {process, NsOpts, Request, Context, otel_ctx:get_current()}, Timeout)
+        gen_server:call(Pid, {process, NsOpts, Request, Context, otel_ctx:get_current()}, TimeoutWithDefense)
     end,
     prg_utils:with_observe(Fun, ?PROCESSING_KEY, [NS, erlang:atom_to_list(TaskType)], #{
         name => atom_to_binary(?FUNCTION_NAME),
@@ -328,6 +332,10 @@ code_change(_OldVsn, #prg_sidecar_state{} = State, _Extra) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+
+add_handling_timeout(Timeout, #{processor := ProcessorConf} = NsOpts) ->
+    ProcessorOpts = maps:get(options, ProcessorConf, #{}),
+    NsOpts#{processor => ProcessorConf#{options => ProcessorOpts#{handling_timeout => Timeout}}}.
 
 do_with_retry(Fun, Delay) ->
     try Fun() of
