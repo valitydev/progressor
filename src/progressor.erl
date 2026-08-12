@@ -4,6 +4,7 @@
 
 -define(TASK_REPEAT_REQUEST_TIMEOUT, 1000).
 -define(PREPARING_KEY, progressor_request_preparing_duration_ms).
+-define(GETTING_KEY, progressor_get_duration_ms).
 
 %% Public API
 -export([init/1]).
@@ -92,11 +93,13 @@ simple_repair(Req) ->
     ).
 
 -spec get(request()) -> {ok, _Result} | {error, _Reason}.
-get(Req) ->
+get(Req0) ->
+    Defaults = #{options => #{}, range => #{}},
+    Req = maps:merge(Defaults, Req0),
     prg_utils:pipe(
         [
             fun add_ns_opts/1,
-            fun do_get/1
+            fun(Data) -> do_get(?FUNCTION_NAME, Data) end
         ],
         Req
     ).
@@ -205,10 +208,9 @@ check_process_continuation(
 do_simple_repair(#{task := _}) ->
     %% process will repaired via timeout task
     {ok, ok};
-do_simple_repair(#{ns_opts := #{storage := StorageOpts} = NsOpts, id := Id, ns := NsId}) ->
+do_simple_repair(#{ns_opts := #{storage := StorageOpts}, id := Id, ns := NsId}) ->
     prg_utils:with_span(#{name => <<"simple repair">>, kind => client}, fun(_SpanCtx) ->
-        ok = prg_storage:repair_process(StorageOpts, NsId, Id),
-        ok = prg_notifier:lifecycle_sink(NsOpts, repair, Id)
+        ok = prg_storage:repair_process(StorageOpts, NsId, Id)
     end),
     {ok, ok}.
 
@@ -295,18 +297,20 @@ await_task_result(StorageOpts, NsId, KeyOrId, StepTimeout, Duration) ->
             )
     end.
 
-do_get(#{ns_opts := #{storage := StorageOpts}, id := Id, ns := NsId, range := HistoryRange} = Req) ->
-    case prg_storage:get_process(external, StorageOpts, NsId, Id, HistoryRange) of
-        {ok, #{status := <<"init">>}} ->
-            %% init task not finished, await and retry
-            Timeout = application:get_env(progressor, task_repeat_request_timeout, ?TASK_REPEAT_REQUEST_TIMEOUT),
-            timer:sleep(Timeout),
-            do_get(Req);
-        Result ->
-            Result
-    end;
-do_get(Req) ->
-    do_get(Req#{range => #{}}).
+do_get(Name, #{ns_opts := #{storage := StorageOpts}, id := Id, ns := NsId, range := HistoryRange, options := Opts}) ->
+    Recepient =
+        case maps:get(use_cache, Opts, true) of
+            true ->
+                external;
+            false ->
+                internal
+        end,
+    prg_utils:with_observe(
+        fun() -> prg_storage:get_process(Recepient, StorageOpts, NsId, Id, HistoryRange) end,
+        ?GETTING_KEY,
+        [erlang:atom_to_binary(NsId, utf8)],
+        #{name => atom_to_binary(Name), kind => client}
+    ).
 
 -define(EVENTS_KEYS, [event_id, event_timestamp, event_metadata, event_payload]).
 

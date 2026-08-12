@@ -34,6 +34,9 @@
 %% 5 min
 -define(DEFAULT_CLEANUP_TIMEOUT, 300000).
 
+-define(METRIC_KEY_CACHE_HIT, progressor_cache_hit_counter).
+-define(METRIC_KEY_CACHE_MISS, progressor_cache_miss_counter).
+
 -spec handle_replication_data(_, _) -> ok.
 handle_replication_data(Pid, ReplData) ->
     gen_server:cast(Pid, {handle_replication_data, ReplData}).
@@ -225,8 +228,10 @@ do_get(NsID, ProcessID, HistoryRange) ->
     ProcessResult = ets:lookup(ProcessesTable, ProcessID),
     case ProcessResult of
         [] ->
+            prometheus_counter:inc(?METRIC_KEY_CACHE_MISS, [erlang:atom_to_binary(NsID, utf8)]),
             undefined;
         [{_, ProcessRaw}] ->
+            prometheus_counter:inc(?METRIC_KEY_CACHE_HIT, [erlang:atom_to_binary(NsID, utf8)]),
             Process = prg_pg_utils:marshal_process(ProcessRaw),
             {EventsRaw, LastEventID} = process_by_range(ets:lookup(EventsTable, ProcessID), HistoryRange),
             Events = lists:map(

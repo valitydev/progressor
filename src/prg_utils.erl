@@ -76,7 +76,6 @@ with_observe(Fun, MetricKey, Labels, SpanParams) ->
 with_observe(Fun, MetricType, MetricKey, Labels, SpanParams) ->
     {DurationMicro, Result} = with_span(SpanParams, fun(_SpanCtx) -> timer:tc(Fun) end),
     DurationMs = DurationMicro div 1000,
-    logger:debug("metric: ~p, labels: ~p, value: ~p", [MetricKey, Labels, DurationMs]),
     ok = collect(MetricType, MetricKey, Labels, DurationMs),
     Result.
 
@@ -101,11 +100,10 @@ with_span(#{name := SpanName} = SpanParams, Fun) ->
     end,
     otel_tracer:with_span(OtelCtx, Tracer, SpanName, SpanOpts, SpannedFun).
 
-collect(histogram, MetricKey, Labels, Value) ->
-    prometheus_histogram:observe(MetricKey, Labels, Value).
-%%collect(_, _MetricKey, _Labels, _Value) ->
-%%    %% TODO implement it
-%%    ok.
+collect(histogram, MetricKey, Labels, DurationMs) ->
+    prometheus_histogram:observe(MetricKey, Labels, DurationMs);
+collect(counter, MetricKey, Labels, _DurationMs) ->
+    prometheus_counter:inc(MetricKey, Labels).
 
 -spec detect_unit(non_neg_integer()) -> time_unit() | no_return().
 detect_unit(Ts) when Ts < ?MAX_SECONDS -> second;
