@@ -177,12 +177,11 @@ do_process_task(
     Deadline,
     #prg_worker_state{
         ns_id = NsId,
-        ns_opts = #{storage := StorageOpts} = NsOpts,
-        process = #{process_id := ProcessId} = _Process,
+        ns_opts = #{storage := StorageOpts},
+        process = #{process_id := ProcessId},
         sidecar_pid = Pid
     } = State
 ) ->
-    ok = prg_worker_sidecar:lifecycle_sink(Pid, Deadline, NsOpts, remove, ProcessId),
     ok = prg_worker_sidecar:remove_process(Pid, Deadline, StorageOpts, NsId, ProcessId),
     ok = next_task(self()),
     State#prg_worker_state{process = undefined};
@@ -262,13 +261,13 @@ success_and_continue(Intent, TaskHeader, Task, Deadline, State, Action, Timestam
     #{context := Context} = Task,
     #prg_worker_state{
         ns_id = NsId,
-        ns_opts = #{storage := StorageOpts} = NsOpts,
-        process = #{process_id := ProcessId, status := OldStatus} = Process,
+        ns_opts = #{storage := StorageOpts},
+        process = #{process_id := ProcessId} = Process,
         sidecar_pid = Pid
     } = State,
     Timestamp = prg_utils:to_microseconds(Timestamp0),
     Now = erlang:system_time(microsecond),
-    {#{status := NewStatus} = ProcessUpdated, Updates} = update_process(Process, Intent),
+    {ProcessUpdated, Updates} = update_process(Process, Intent),
     Response = response(Intent),
     TaskResult = task_result(Task, <<"finished">>, Response),
     NewTask = #{
@@ -280,10 +279,6 @@ success_and_continue(Intent, TaskHeader, Task, Deadline, State, Action, Timestam
         last_retry_interval => 0,
         attempts_count => 0
     },
-    ok = prg_worker_sidecar:lifecycle_sink(
-        Pid, Deadline, NsOpts, lifecycle_event(TaskHeader, OldStatus, NewStatus), ProcessId
-    ),
-    ok = prg_worker_sidecar:event_sink(Pid, Deadline, NsOpts, ProcessId, Events),
     SaveResult = prg_worker_sidecar:complete_and_continue(
         Pid,
         Deadline,
@@ -315,12 +310,11 @@ success_and_continue(Intent, TaskHeader, Task, Deadline, State, Action, Timestam
 success_and_remove(Intent, TaskHeader, _Task, Deadline, State) ->
     #prg_worker_state{
         ns_id = NsId,
-        ns_opts = #{storage := StorageOpts} = NsOpts,
-        process = #{process_id := ProcessId} = _Process,
+        ns_opts = #{storage := StorageOpts},
+        process = #{process_id := ProcessId},
         sidecar_pid = Pid
     } = State,
     Response = response(Intent),
-    ok = prg_worker_sidecar:lifecycle_sink(Pid, Deadline, NsOpts, remove, ProcessId),
     ok = prg_worker_sidecar:remove_process(Pid, Deadline, StorageOpts, NsId, ProcessId),
     _ = maybe_reply(TaskHeader, Response),
     ok = next_task(self()),
@@ -330,15 +324,11 @@ success_and_suspend(Intent, TaskHeader, Task, Deadline, State) ->
     #{events := Events} = Intent,
     #prg_worker_state{
         ns_id = NsId,
-        ns_opts = #{storage := StorageOpts} = NsOpts,
-        process = #{process_id := ProcessId, status := OldStatus} = Process,
+        ns_opts = #{storage := StorageOpts},
+        process = Process,
         sidecar_pid = Pid
     } = State,
-    {#{status := NewStatus} = ProcessUpdated, Updates} = update_process(Process, Intent),
-    ok = prg_worker_sidecar:lifecycle_sink(
-        Pid, Deadline, NsOpts, lifecycle_event(TaskHeader, OldStatus, NewStatus), ProcessId
-    ),
-    ok = prg_worker_sidecar:event_sink(Pid, Deadline, NsOpts, ProcessId, Events),
+    {ProcessUpdated, Updates} = update_process(Process, Intent),
     Response = response(Intent),
     TaskResult = task_result(Task, <<"finished">>, Response),
     SaveResult = prg_worker_sidecar:complete_and_suspend(
@@ -375,15 +365,11 @@ success_and_unlock(
     #{events := Events} = Intent,
     #prg_worker_state{
         ns_id = NsId,
-        ns_opts = #{storage := StorageOpts} = NsOpts,
-        process = #{process_id := ProcessId} = Process,
+        ns_opts = #{storage := StorageOpts},
+        process = Process,
         sidecar_pid = Pid
     } = State,
     Now = erlang:system_time(microsecond),
-    ok = prg_worker_sidecar:lifecycle_sink(
-        Pid, Deadline, NsOpts, repair, ProcessId
-    ),
-    ok = prg_worker_sidecar:event_sink(Pid, Deadline, NsOpts, ProcessId, Events),
     {ProcessUpdated, Updates} = update_process(Process, Intent),
     Response = response(Intent),
     TaskResult = task_result(Task, <<"finished">>, Response),
@@ -435,16 +421,12 @@ success_and_unlock(Intent, TaskHeader, Task, Deadline, State) ->
     #{events := Events} = Intent,
     #prg_worker_state{
         ns_id = NsId,
-        ns_opts = #{storage := StorageOpts} = NsOpts,
-        process = #{process_id := ProcessId, status := OldStatus} = Process,
+        ns_opts = #{storage := StorageOpts},
+        process = #{process_id := ProcessId} = Process,
         sidecar_pid = Pid
     } = State,
     Now = erlang:system_time(microsecond),
-    {#{status := NewStatus} = ProcessUpdated, Updates} = update_process(Process, Intent),
-    ok = prg_worker_sidecar:lifecycle_sink(
-        Pid, Deadline, NsOpts, lifecycle_event(TaskHeader, OldStatus, NewStatus), ProcessId
-    ),
-    ok = prg_worker_sidecar:event_sink(Pid, Deadline, NsOpts, ProcessId, Events),
+    {ProcessUpdated, Updates} = update_process(Process, Intent),
     Response = response(Intent),
     TaskResult = task_result(Task, <<"finished">>, Response),
     SaveResult = prg_worker_sidecar:complete_and_unlock(
@@ -485,7 +467,7 @@ error_and_stop({error, Reason} = Response, TaskHeader, Task, Deadline, State) ->
     {TaskType, _} = TaskHeader,
     #prg_worker_state{
         ns_id = NsId,
-        ns_opts = #{storage := StorageOpts} = NsOpts,
+        ns_opts = #{storage := StorageOpts},
         process = #{process_id := ProcessId} = Process,
         sidecar_pid = Pid
     } = State,
@@ -495,9 +477,6 @@ error_and_stop({error, Reason} = Response, TaskHeader, Task, Deadline, State) ->
                 {Process, #{process_id => ProcessId}};
             _ ->
                 Detail = prg_utils:format(Reason),
-                ok = prg_worker_sidecar:lifecycle_sink(
-                    Pid, Deadline, NsOpts, {error, Detail}, ProcessId
-                ),
                 update_process(Process, {error, {Detail, undefined}})
         end,
     TaskResult = task_result(Task, <<"error">>, Response),
@@ -512,7 +491,7 @@ error_and_retry({error, Reason} = Response, TaskHeader, Task, Deadline, State) -
     #{task_id := TaskId} = Task,
     #prg_worker_state{
         ns_id = NsId,
-        ns_opts = #{storage := StorageOpts, retry_policy := RetryPolicy} = NsOpts,
+        ns_opts = #{storage := StorageOpts, retry_policy := RetryPolicy},
         process = #{process_id := ProcessId} = Process,
         sidecar_pid = Pid
     } = State,
@@ -522,7 +501,6 @@ error_and_retry({error, Reason} = Response, TaskHeader, Task, Deadline, State) -
             not_retryable ->
                 Detail = prg_utils:format(Reason),
                 {_ProcessUpdated, Updates} = update_process(Process, {error, {Detail, TaskId}}),
-                ok = prg_worker_sidecar:lifecycle_sink(Pid, Deadline, NsOpts, {error, Detail}, ProcessId),
                 ok = prg_worker_sidecar:complete_and_error(
                     Pid, Deadline, StorageOpts, NsId, TaskResult, Updates
                 );
@@ -753,10 +731,3 @@ last_event_id([]) ->
 last_event_id(History) ->
     [#{event_id := Id} | _] = lists:reverse(History),
     Id.
-
-lifecycle_event({timeout, _}, <<"error">>, <<"running">>) ->
-    repair;
-lifecycle_event({timeout, _}, _, _) ->
-    timeout;
-lifecycle_event({TaskType, _}, _, _) ->
-    TaskType.

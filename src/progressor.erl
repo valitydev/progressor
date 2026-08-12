@@ -208,10 +208,9 @@ check_process_continuation(
 do_simple_repair(#{task := _}) ->
     %% process will repaired via timeout task
     {ok, ok};
-do_simple_repair(#{ns_opts := #{storage := StorageOpts} = NsOpts, id := Id, ns := NsId}) ->
+do_simple_repair(#{ns_opts := #{storage := StorageOpts}, id := Id, ns := NsId}) ->
     prg_utils:with_span(#{name => <<"simple repair">>, kind => client}, fun(_SpanCtx) ->
-        ok = prg_storage:repair_process(StorageOpts, NsId, Id),
-        ok = prg_notifier:lifecycle_sink(NsOpts, repair, Id)
+        ok = prg_storage:repair_process(StorageOpts, NsId, Id)
     end),
     {ok, ok}.
 

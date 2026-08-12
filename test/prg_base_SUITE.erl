@@ -49,7 +49,6 @@ end_per_suite(_Config) ->
 
 init_per_group(cache, C) ->
     _ = prg_ct_hook:start_applications(),
-    _ = prg_ct_hook:create_kafka_topics(),
     [{ns_id, 'cached/namespace'}, {repl_timeout, 50} | C];
 init_per_group(tasks_injection, C) ->
     PrgConfig = prg_ct_hook:app_env(progressor),
@@ -63,17 +62,14 @@ init_per_group(tasks_injection, C) ->
     ),
     Applications = [
         {epg_connector, prg_ct_hook:app_env(epg_connector)},
-        {brod, prg_ct_hook:app_env(brod)},
         {progressor, UpdPrgConfig},
         {opentelemetry_exporter, []},
         {opentelemetry, [{span_processor, simple}]}
     ],
     _ = prg_ct_hook:start_applications(Applications),
-    _ = prg_ct_hook:create_kafka_topics(),
     C;
 init_per_group(_, C) ->
     _ = prg_ct_hook:start_applications(),
-    _ = prg_ct_hook:create_kafka_topics(),
     C.
 
 end_per_group(_, _) ->
