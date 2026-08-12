@@ -52,6 +52,25 @@ start_namespace(NsID, NsOpts) ->
 
 create_metrics() ->
     _ = prometheus_histogram:declare([
+        {name, progressor_get_duration_ms},
+        {help, "Process reading (get) durations in millisecond"},
+        {buckets, [50, 150, 300, 500, 750, 1000]},
+        {labels, [prg_namespace]}
+    ]),
+
+    _ = prometheus_counter:declare([
+        {name, progressor_cache_hit_counter},
+        {help, "Process reading (get) from cache"},
+        {labels, [prg_namespace]}
+    ]),
+
+    _ = prometheus_counter:declare([
+        {name, progressor_cache_miss_counter},
+        {help, "Process reading (get) bypassing cache"},
+        {labels, [prg_namespace]}
+    ]),
+
+    _ = prometheus_histogram:declare([
         {name, progressor_calls_scanning_duration_ms},
         {help, "Calls (call, repair) scanning durations in millisecond"},
         {buckets, [50, 150, 300, 500, 750, 1000]},
