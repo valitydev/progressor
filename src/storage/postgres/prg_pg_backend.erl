@@ -159,7 +159,8 @@ repair_process(PgOpts, NsId, ProcessId) ->
     {ok, 1} = epg_pool:query(
         Pool,
         "UPDATE " ++ ProcessesTable ++
-            " SET status = 'running', previous_status = 'error', corrupted_by = null, detail = null "
+            " SET status = 'running', previous_status = 'error', "
+            "corrupted_by = null, corrupted_type = null, detail = null "
             "WHERE process_id = $1",
         [ProcessId]
     ),
@@ -244,7 +245,7 @@ collect_zombies(PgOpts, NsId, Timeout) ->
                 "WITH zombie_tasks as ("
                 "  DELETE FROM " ++ RunningTable ++
                     " WHERE running_time < $1 "
-                    "    RETURNING process_id, task_id"
+                    "    RETURNING process_id, task_id, task_type"
                     "  ), "
                     "  t1 AS (UPDATE " ++ TaskTable ++
                     " SET status = 'cancelled' WHERE status IN ('waiting', 'blocked') "
@@ -258,7 +259,7 @@ collect_zombies(PgOpts, NsId, Timeout) ->
                     "  WHEN MATCHED THEN UPDATE SET"
                     "  status = 'error',"
                     "  detail = 'zombie detected',"
-                    "  corrupted_by = zt.task_id",
+                    "  corrupted_by = zt.task_id, corrupted_type = zt.task_type",
                 [TsBackward, Now]
             )
         end

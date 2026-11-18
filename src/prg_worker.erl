@@ -411,7 +411,7 @@ error_and_stop({error, Reason} = Response, TaskHeader, Task, Deadline, State) ->
                 {Process, #{process_id => ProcessId}};
             _ ->
                 Detail = prg_utils:format(Reason),
-                update_process(Process, {error, {Detail, undefined}})
+                update_process(Process, {error, {Detail, Task}})
         end,
     TaskResult = task_result(Task, Process, <<"error">>, Response),
     ok = prg_worker_sidecar:complete_and_error(
@@ -422,7 +422,6 @@ error_and_stop({error, Reason} = Response, TaskHeader, Task, Deadline, State) ->
     State#prg_worker_state{process = undefined}.
 
 error_and_retry({error, Reason} = Response, TaskHeader, Task, Deadline, State) ->
-    #{task_id := TaskId} = Task,
     #prg_worker_state{
         ns_id = NsId,
         ns_opts = #{storage := StorageOpts, retry_policy := RetryPolicy},
@@ -434,7 +433,7 @@ error_and_retry({error, Reason} = Response, TaskHeader, Task, Deadline, State) -
         case check_retryable(TaskHeader, Task, RetryPolicy, Reason) of
             not_retryable ->
                 Detail = prg_utils:format(Reason),
-                {_ProcessUpdated, Updates} = update_process(Process, {error, {Detail, TaskId}}),
+                {_ProcessUpdated, Updates} = update_process(Process, {error, {Detail, Task}}),
                 ok = prg_worker_sidecar:complete_and_error(
                     Pid, Deadline, StorageOpts, NsId, TaskResult, Updates
                 );
@@ -473,7 +472,10 @@ error_and_retry({error, Reason} = Response, TaskHeader, Task, Deadline, State) -
 update_process(#{status := <<"error">>, process_id := ProcessId} = Process, {error, _}) ->
     %% process error when already broken
     {Process, #{process_id => ProcessId}};
-update_process(#{status := Status, process_id := ProcessId} = Process, {error, {Detail, Cause}}) when
+update_process(
+    #{status := Status, process_id := ProcessId} = Process,
+    {error, {Detail, #{task_id := TaskId, task_type := TaskType}}}
+) when
     Status =:= <<"running">>;
     Status =:= <<"init">>
 ->
@@ -486,18 +488,13 @@ update_process(#{status := Status, process_id := ProcessId} = Process, {error, {
         status_changed_at => StatusChangedAt,
         detail => Detail
     },
-    case Cause of
-        undefined ->
-            {maps:merge(Process, ProcessUpdates), ProcessUpdates};
-        TaskId ->
-            Updates = ProcessUpdates#{corrupted_by => TaskId},
-            {maps:merge(Process, Updates), Updates}
-    end;
+    Updates = ProcessUpdates#{corrupted_by => TaskId, corrupted_type => TaskType},
+    {maps:merge(Process, Updates), Updates};
 update_process(#{status := <<"error">>, process_id := ProcessId} = Process, Intent) ->
     %% process repaired (transition from error to running)
     StatusChangedAt = erlang:system_time(microsecond),
     NewProcess = maps:without(
-        [detail, corrupted_by],
+        [detail, corrupted_by, corrupted_type],
         Process#{status => <<"running">>, previous_status := <<"error">>, status_changed_at => StatusChangedAt}
     ),
     ProcessUpdates = #{
@@ -506,7 +503,8 @@ update_process(#{status := <<"error">>, process_id := ProcessId} = Process, Inte
         previous_status => <<"error">>,
         status_changed_at => StatusChangedAt,
         detail => undefined,
-        corrupted_by => undefined
+        corrupted_by => undefined,
+        corrupted_type => undefined
     },
     update_process_from_intent(NewProcess, ProcessUpdates, Intent);
 update_process(#{status := <<"init">>, process_id := ProcessId} = Process, Intent) ->

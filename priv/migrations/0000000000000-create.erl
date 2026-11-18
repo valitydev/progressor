@@ -67,6 +67,7 @@ perform(Connection, MigrationOpts) ->
             "detail TEXT, "
             "aux_state BYTEA, "
             "current_generation INTEGER, "
+            "corrupted_type task_type, "
             "previous_status process_status NOT NULL, "
             "status_changed_at TIMESTAMP WITH TIME ZONE NOT NULL, "
             "created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(), "

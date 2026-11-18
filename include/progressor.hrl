@@ -8,6 +8,7 @@
     aux_state,
     metadata,
     corrupted_by,
+    corrupted_type,
     previous_status,
     status_changed_at,
     current_generation
@@ -21,6 +22,7 @@
     metadata => map(),
     state => process_state(),
     corrupted_by => task_id(),
+    corrupted_type => task_type(),
     current_generation => explicit_generation(),
     previous_status => process_status(),
     created_at => timestamp_us(),

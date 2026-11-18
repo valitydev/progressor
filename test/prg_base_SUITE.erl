@@ -369,7 +369,8 @@ simple_repair_after_non_retriable_error_test(C) ->
         process_id := Id,
         current_generation := 1,
         detail := <<"do_not_retry">>,
-        corrupted_by := _
+        corrupted_by := _,
+        corrupted_type := <<"timeout">>
     }} = progressor:get(#{ns => ?NS(C), id => Id}),
     {ok, ok} = progressor:simple_repair(#{ns => ?NS(C), id => Id, context => <<"simple_repair_ctx">>}),
     4 = expect_steps_counter(4),
@@ -377,6 +378,7 @@ simple_repair_after_non_retriable_error_test(C) ->
     {ok, ?PROCESS_EXPECTED(Id, 3, 3, <<"running">>) = Process} = progressor:get(#{ns => ?NS(C), id => Id}),
     false = erlang:is_map_key(detail, Process),
     false = erlang:is_map_key(corrupted_by, Process),
+    false = erlang:is_map_key(corrupted_type, Process),
     unmock_processor(),
     ok.
 
@@ -397,7 +399,8 @@ repair_after_non_retriable_error_test(C) ->
         process_id := Id,
         current_generation := 1,
         detail := <<"do_not_retry">>,
-        corrupted_by := _
+        corrupted_by := _,
+        corrupted_type := <<"timeout">>
     }} = progressor:get(#{ns => ?NS(C), id => Id}),
     {ok, ok} = progressor:repair(#{ns => ?NS(C), id => Id, args => <<"repair_args">>}),
     3 = expect_steps_counter(4),
@@ -405,6 +408,7 @@ repair_after_non_retriable_error_test(C) ->
     {ok, ?PROCESS_EXPECTED(Id, 2, 2, <<"running">>) = Process} = progressor:get(#{ns => ?NS(C), id => Id}),
     false = erlang:is_map_key(detail, Process),
     false = erlang:is_map_key(corrupted_by, Process),
+    false = erlang:is_map_key(corrupted_type, Process),
     unmock_processor(),
     ok.
 %%
@@ -426,7 +430,8 @@ error_after_max_retries_test(C) ->
         process_id := Id,
         current_generation := 1,
         detail := <<"retry_this">>,
-        corrupted_by := _
+        corrupted_by := _,
+        corrupted_type := <<"timeout">>
     }} = progressor:get(#{ns => ?NS(C), id => Id}),
     unmock_processor(),
     ok.
@@ -449,7 +454,9 @@ repair_after_call_error_test(C) ->
         state := #{generation := 1},
         process_id := Id,
         current_generation := 1,
-        detail := <<"retry_this">>
+        detail := <<"retry_this">>,
+        corrupted_by := CorruptionTask,
+        corrupted_type := <<"call">>
     }} = progressor:get(#{ns => ?NS(C), id => Id}),
     {error, <<"repair_error">>} = progressor:repair(#{
         ns => ?NS(C), id => Id, args => <<"bad_repair_args">>
@@ -462,7 +469,9 @@ repair_after_call_error_test(C) ->
         state := #{generation := 1},
         process_id := Id,
         current_generation := 1,
-        detail := <<"retry_this">>
+        detail := <<"retry_this">>,
+        corrupted_by := CorruptionTask,
+        corrupted_type := <<"call">>
     }} = progressor:get(#{ns => ?NS(C), id => Id}),
     {ok, ok} = progressor:repair(#{ns => ?NS(C), id => Id, args => <<"repair_args">>}),
     4 = expect_steps_counter(4),
@@ -470,6 +479,7 @@ repair_after_call_error_test(C) ->
     {ok, ?PROCESS_EXPECTED(Id, 2, 2, <<"running">>) = Process} = progressor:get(#{ns => ?NS(C), id => Id}),
     false = erlang:is_map_key(detail, Process),
     false = erlang:is_map_key(corrupted_by, Process),
+    false = erlang:is_map_key(corrupted_type, Process),
     ?assertEqual(#{<<"k2">> => <<"v2">>}, maps:get(metadata, Process)),
     unmock_processor(),
     ok.
@@ -536,21 +546,30 @@ simple_repair_after_call_error_test(C) ->
     timer:sleep(?AWAIT_TIMEOUT(C)),
     {ok, #{
         detail := <<"retry_this">>,
+        corrupted_by := CorruptionTask,
+        corrupted_type := <<"call">>,
         metadata := #{<<"k">> := <<"v">>},
         state := #{generation := 1},
         process_id := Id,
         status := <<"error">>,
         previous_status := <<"running">>
     }} = progressor:get(#{ns => ?NS(C), id => Id}),
+    {ok, BeforeTrace} = progressor:trace(#{ns => ?NS(C), id => Id}),
+    ?assertMatch([_, #{task_id := CorruptionTask, task_type := <<"call">>}], BeforeTrace),
     {ok, ok} = progressor:simple_repair(#{ns => ?NS(C), id => Id}),
     timer:sleep(?AWAIT_TIMEOUT(C)),
-    {ok, #{
-        metadata := #{<<"k">> := <<"v">>},
-        state := #{generation := 1},
-        process_id := Id,
-        status := <<"running">>,
-        previous_status := <<"error">>
-    }} = progressor:get(#{ns => ?NS(C), id => Id}),
+    {ok,
+        #{
+            metadata := #{<<"k">> := <<"v">>},
+            state := #{generation := 1},
+            process_id := Id,
+            status := <<"running">>,
+            previous_status := <<"error">>
+        } = Process} = progressor:get(#{ns => ?NS(C), id => Id}),
+    ?assertNot(maps:is_key(corrupted_by, Process)),
+    ?assertNot(maps:is_key(corrupted_type, Process)),
+    ?assertNot(maps:is_key(detail, Process)),
+    ?assertEqual({ok, BeforeTrace}, progressor:trace(#{ns => ?NS(C), id => Id})),
     unmock_processor(),
     ok.
 

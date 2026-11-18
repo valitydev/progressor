@@ -33,6 +33,7 @@ marshal_process(Process) ->
             (<<"created_at">>, Ts, Acc) -> Acc#{created_at => Ts};
             (<<"current_generation">>, Gen, Acc) -> Acc#{current_generation => Gen};
             (<<"corrupted_by">>, CorruptedBy, Acc) -> Acc#{corrupted_by => CorruptedBy};
+            (<<"corrupted_type">>, Type, Acc) -> Acc#{corrupted_type => Type};
             (_, _, Acc) -> Acc
         end,
         #{},

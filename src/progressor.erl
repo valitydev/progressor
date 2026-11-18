@@ -190,13 +190,8 @@ check_process_continuation(
     case prg_storage:get_process(external, StorageOpts, NsId, Id, latest) of
         {ok, #{status := <<"running">>}} ->
             {error, <<"process is running">>};
-        {ok, #{status := <<"error">>, corrupted_by := TaskId}} when is_integer(TaskId) ->
-            case prg_storage:get_task(external, StorageOpts, NsId, TaskId) of
-                {ok, #{task_type := Type}} when Type =:= <<"timeout">>; Type =:= <<"remove">> ->
-                    add_task(Opts#{type => Type});
-                {ok, _} ->
-                    Opts
-            end;
+        {ok, #{status := <<"error">>, corrupted_type := Type}} when Type =:= <<"timeout">>; Type =:= <<"remove">> ->
+            add_task(Opts#{type => Type});
         {ok, #{status := <<"error">>}} ->
             Opts;
         {error, _} = Error ->
