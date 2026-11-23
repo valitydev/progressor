@@ -8,8 +8,17 @@ CREATE TABLE IF NOT EXISTS namespace_processes(
     "detail" TEXT,
     "aux_state" BYTEA,
     "created_at" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
-    "metadata" JSONB
+    "metadata" JSONB,
+    "subnamespace" TEXT CHECK (subnamespace <> ''),
+    "sub_id" TEXT CHECK (sub_id <> ''),
+    "aliases" TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[]
+        CHECK (array_position(aliases, '') IS NULL AND array_position(aliases, NULL) IS NULL),
+    CONSTRAINT sub_id_requires_subnamespace CHECK (sub_id IS NULL OR subnamespace IS NOT NULL)
 );
+
+CREATE INDEX IF NOT EXISTS "namespace_processes_subnamespace_idx" ON namespace_processes (subnamespace);
+CREATE INDEX IF NOT EXISTS "namespace_processes_sub_id_idx" ON namespace_processes (subnamespace, sub_id);
+CREATE INDEX IF NOT EXISTS "namespace_processes_aliases_idx" ON namespace_processes USING GIN (aliases);
 
 CREATE TABLE IF NOT EXISTS namespace_tasks(
     "task_id" BIGSERIAL PRIMARY KEY,

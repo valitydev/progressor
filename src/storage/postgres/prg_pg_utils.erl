@@ -26,6 +26,9 @@ marshal_process(Process) ->
             (<<"status">>, Status, Acc) -> Acc#{status => Status};
             (<<"detail">>, Detail, Acc) -> Acc#{detail => Detail};
             (<<"aux_state">>, AuxState, Acc) -> Acc#{aux_state => AuxState};
+            (<<"subnamespace">>, Subnamespace, Acc) -> Acc#{subnamespace => Subnamespace};
+            (<<"sub_id">>, SubId, Acc) -> Acc#{sub_id => SubId};
+            (<<"aliases">>, Aliases, Acc) -> Acc#{aliases => Aliases};
             (<<"metadata">>, Meta, Acc) -> Acc#{metadata => Meta};
             (<<"corrupted_by">>, CorruptedBy, Acc) -> Acc#{corrupted_by => CorruptedBy};
             (_, _, Acc) -> Acc

@@ -185,7 +185,7 @@ handle_call(
     {
         process,
         #{processor := #{client := Handler, options := Options}, namespace := _NsName} = _NsOpts,
-        Request,
+        {_, _, Process} = Request,
         Ctx,
         OtelCtx
     },
@@ -194,15 +194,21 @@ handle_call(
 ) ->
     _ = otel_ctx:attach(OtelCtx),
     Response =
-        try Handler:process(Request, Options, Ctx) of
-            {ok, _Result} = OK ->
-                OK;
-            {error, Reason} = ERR ->
-                logger:error("processor error: ~p", [Reason]),
-                ERR;
-            Unsupported ->
-                logger:error("processor unexpected result: ~p", [Unsupported]),
-                {error, <<"unsupported_result">>}
+        try
+            %% validation is inside the try body to report contract violations
+            %% as processor exceptions
+            case Handler:process(Request, Options, Ctx) of
+                {ok, Intent} when is_map(Intent) ->
+                    {ok, validate_lookup_fields(Intent, Process)};
+                {ok, _Result} = OK ->
+                    OK;
+                {error, Reason} = ERR ->
+                    logger:error("processor error: ~p", [Reason]),
+                    ERR;
+                Unsupported ->
+                    logger:error("processor unexpected result: ~p", [Unsupported]),
+                    {error, <<"unsupported_result">>}
+            end
         catch
             Class:Term:Trace ->
                 logger:error("processor exception: ~p", [[Class, Term, Trace]]),
@@ -304,6 +310,34 @@ code_change(_OldVsn, #prg_sidecar_state{} = State, _Extra) ->
 add_handling_timeout(Timeout, #{processor := ProcessorConf} = NsOpts) ->
     ProcessorOpts = maps:get(options, ProcessorConf, #{}),
     NsOpts#{processor => ProcessorConf#{options => ProcessorOpts#{handling_timeout => Timeout}}}.
+
+%% Validates the resulting combination of lookup fields (process values overridden by intent)
+%% before saving, so that values unacceptable for PostgreSQL never reach the storage.
+validate_lookup_fields(Intent, Process) ->
+    Merged = maps:merge(Process, Intent),
+    Subnamespace = maps:get(subnamespace, Merged, undefined),
+    SubId = maps:get(sub_id, Merged, undefined),
+    Aliases = maps:get(aliases, Merged, []),
+    Valid =
+        valid_optional_identifier(Subnamespace) andalso
+            valid_optional_identifier(SubId) andalso
+            (SubId =:= undefined orelse Subnamespace =/= undefined) andalso
+            valid_aliases(Aliases),
+    case Valid of
+        true when is_map_key(aliases, Intent) ->
+            Intent#{aliases => lists:usort(Aliases)};
+        true ->
+            Intent;
+        false ->
+            erlang:error({invalid_processor_fields, invalid_lookup_fields})
+    end.
+
+valid_optional_identifier(undefined) -> true;
+valid_optional_identifier(Value) -> prg_utils:valid_identifier(Value).
+
+valid_aliases([]) -> true;
+valid_aliases([Alias | Rest]) -> prg_utils:valid_identifier(Alias) andalso valid_aliases(Rest);
+valid_aliases(_) -> false.
 
 do_with_retry(Fun, Delay) ->
     try Fun() of

@@ -15,6 +15,8 @@
 -export([put_process_data/4]).
 -export([process_trace/3]).
 -export([repair_process/3]).
+-export([get_by_sub_id/4]).
+-export([get_by_alias/3]).
 
 %% scan functions
 -export([collect_zombies/3]).
@@ -151,6 +153,14 @@ repair_process(PgOpts, NsId, ProcessId) ->
         [ProcessId]
     ),
     ok.
+
+-spec get_by_sub_id(pg_opts(), namespace_id(), binary(), binary()) -> {ok, [process()]} | {error, _Reason}.
+get_by_sub_id(PgOpts, NsId, Subnamespace, SubId) ->
+    lookup_processes(PgOpts, NsId, "subnamespace = $1 AND sub_id = $2", [Subnamespace, SubId]).
+
+-spec get_by_alias(pg_opts(), namespace_id(), binary()) -> {ok, [process()]} | {error, _Reason}.
+get_by_alias(PgOpts, NsId, Alias) ->
+    lookup_processes(PgOpts, NsId, "aliases @> ARRAY[$1]::text[]", [Alias]).
 
 -spec put_process_data(
     pg_opts(),
@@ -771,6 +781,60 @@ direction(#{direction := backward}) ->
 direction(_) ->
     " ORDER BY event_id ASC ".
 
+%% Processes and their histories are read by two queries (without N+1 and without duplicating
+%% process columns for every event) within one REPEATABLE READ transaction to get a consistent snapshot.
+lookup_processes(PgOpts, NsId, Condition, Params) ->
+    Pool = get_pool(external, PgOpts),
+    #{
+        processes := ProcessesTable,
+        events := EventsTable
+    } = prg_pg_utils:tables(NsId),
+    Result = epg_pool:with_transaction(
+        Pool,
+        fun(Connection) ->
+            maybe
+                {ok, ProcColumns, ProcRows} ?=
+                    epg_pool:query(Connection, "SELECT * FROM " ++ ProcessesTable ++ " WHERE " ++ Condition, Params),
+                Processes = to_maps(ProcColumns, ProcRows, fun marshal_process/1),
+                {ok, EventsByProcess} ?= get_events_by_processes(Connection, EventsTable, Processes),
+                {ok, [with_full_history(Process, EventsByProcess) || Process <- Processes]}
+            end
+        end,
+        [{reraise, false}, {begin_opts, "ISOLATION LEVEL REPEATABLE READ READ ONLY"}]
+    ),
+    case Result of
+        {ok, _} = OK ->
+            OK;
+        {error, _} = Error ->
+            Error;
+        {rollback, Reason} ->
+            {error, Reason}
+    end.
+
+get_events_by_processes(_Connection, _EventsTable, []) ->
+    {ok, #{}};
+get_events_by_processes(Connection, EventsTable, Processes) ->
+    ProcessIds = [ProcessId || #{process_id := ProcessId} <- Processes],
+    maybe
+        {ok, Columns, Rows} ?=
+            epg_pool:query(
+                Connection,
+                "SELECT * FROM " ++ EventsTable ++ " WHERE process_id = ANY($1) ORDER BY process_id, event_id ASC",
+                [ProcessIds]
+            ),
+        Events = to_maps(Columns, Rows, fun marshal_event/1),
+        {ok, maps:groups_from_list(fun(#{process_id := ProcessId}) -> ProcessId end, Events)}
+    end.
+
+with_full_history(#{process_id := ProcessId} = Process, EventsByProcess) ->
+    History = maps:get(ProcessId, EventsByProcess, []),
+    LastEventId =
+        case History of
+            [] -> 0;
+            _ -> maps:get(event_id, lists:last(History))
+        end,
+    Process#{history => History, last_event_id => LastEventId, range => #{}}.
+
 do_get_process(Connection, Table, ProcessId) ->
     epg_pool:query(
         Connection,
@@ -1280,6 +1344,9 @@ marshal_process(Process) ->
             (<<"status">>, Status, Acc) -> Acc#{status => Status};
             (<<"detail">>, Detail, Acc) -> Acc#{detail => Detail};
             (<<"aux_state">>, AuxState, Acc) -> Acc#{aux_state => AuxState};
+            (<<"subnamespace">>, Subnamespace, Acc) -> Acc#{subnamespace => Subnamespace};
+            (<<"sub_id">>, SubId, Acc) -> Acc#{sub_id => SubId};
+            (<<"aliases">>, Aliases, Acc) -> Acc#{aliases => Aliases};
             (<<"metadata">>, Meta, Acc) -> Acc#{metadata => Meta};
             (<<"corrupted_by">>, CorruptedBy, Acc) -> Acc#{corrupted_by => CorruptedBy};
             (<<"initialization">>, TaskId, Acc) -> Acc#{initialization => TaskId};

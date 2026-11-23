@@ -37,6 +37,10 @@
 -define(METRIC_KEY_CACHE_HIT, progressor_cache_hit_counter).
 -define(METRIC_KEY_CACHE_MISS, progressor_cache_miss_counter).
 
+%% Process columns that are not cached: WAL reader can't decode text arrays losslessly
+%% (e.g. element NULLfoo), so aliases are available only when reading from PostgreSQL.
+-define(UNCACHED_PROCESS_FIELDS, [<<"aliases">>]).
+
 -spec handle_replication_data(_, _) -> ok.
 handle_replication_data(Pid, ReplData) ->
     gen_server:cast(Pid, {handle_replication_data, ReplData}).
@@ -232,7 +236,7 @@ do_get(NsID, ProcessID, HistoryRange) ->
             undefined;
         [{_, ProcessRaw}] ->
             prometheus_counter:inc(?METRIC_KEY_CACHE_HIT, [erlang:atom_to_binary(NsID, utf8)]),
-            Process = prg_pg_utils:marshal_process(ProcessRaw),
+            Process = prg_pg_utils:marshal_process(maps:without(?UNCACHED_PROCESS_FIELDS, ProcessRaw)),
             {EventsRaw, LastEventID} = process_by_range(ets:lookup(EventsTable, ProcessID), HistoryRange),
             Events = lists:map(
                 fun(Ev) -> prg_pg_utils:marshal_event(convert_event(Ev)) end,
@@ -251,7 +255,7 @@ process_operation(<<"processes">>, NsID, {_Table, insert, #{<<"process_id">> := 
         processes := ProcessesTable,
         events := EventsTable
     } = tables(NsID),
-    true = ets:insert(ProcessesTable, {ProcessID, Row}),
+    true = ets:insert(ProcessesTable, {ProcessID, cacheable_row(<<"processes">>, Row)}),
     reset_timer([ProcessesTable, EventsTable], ProcessID, State);
 process_operation(<<"events">>, NsID, {_Table, insert, #{<<"process_id">> := ProcessID} = Row, _}, State) ->
     #{
@@ -267,7 +271,7 @@ process_operation(<<"events">>, NsID, {_Table, insert, #{<<"process_id">> := Pro
             %% old process, not cached, ignore
             State
     end;
-process_operation(_, NsID, {Table, update, #{<<"process_id">> := ProcessID} = Row, _}, State) ->
+process_operation(Object, NsID, {Table, update, #{<<"process_id">> := ProcessID} = Row, _}, State) ->
     TableETS = binary_to_atom(Table),
     case ets:lookup(TableETS, ProcessID) of
         [{_, OldRow}] ->
@@ -275,7 +279,7 @@ process_operation(_, NsID, {Table, update, #{<<"process_id">> := ProcessID} = Ro
                 processes := ProcessesTable,
                 events := EventsTable
             } = tables(NsID),
-            true = ets:insert(TableETS, {ProcessID, maps:merge(OldRow, Row)}),
+            true = ets:insert(TableETS, {ProcessID, maps:merge(OldRow, cacheable_row(Object, Row))}),
             reset_timer([ProcessesTable, EventsTable], ProcessID, State);
         [] ->
             State
@@ -287,6 +291,11 @@ process_operation(_Object, _NsID, {Table, delete, #{<<"process_id">> := ProcessI
 process_operation(_Object, _NsID, ReplData, State) ->
     logger:warning("Unsupported cache operation: ~p", [ReplData]),
     State.
+
+cacheable_row(<<"processes">>, Row) ->
+    maps:without(?UNCACHED_PROCESS_FIELDS, Row);
+cacheable_row(_Object, Row) ->
+    Row.
 
 reset_timer(Tables, ProcessID, #{timers := Timers} = State) when is_map_key(ProcessID, Timers) ->
     TRef = maps:get(ProcessID, Timers),

@@ -23,6 +23,12 @@
   HELP progressor_process_removing_duration_ms Task completion durations in millisecond
 - TYPE progressor_notification_duration_ms histogram
   HELP progressor_notification_duration_ms Notification durations in millisecond
+- TYPE progressor_get_by_sub_id_duration_ms histogram
+  HELP progressor_get_by_sub_id_duration_ms Processes lookup by sub_id durations in millisecond
+- TYPE progressor_get_by_alias_duration_ms histogram
+  HELP progressor_get_by_alias_duration_ms Processes lookup by alias durations in millisecond
+
+У метрик поиска единственный label — `prg_namespace`. Значения `subnamespace`, `sub_id` и алиасов в labels не попадают.
 
 ## Базовые сценарии
 
@@ -247,3 +253,23 @@ MERGE INTO ProcessesTable AS pt USING zombie_tasks AS zt ON pt.process_id = zt.p
 ```
 зомби-задачи переводятся в статус error, соответствующий процесс также переводится в статус error, а все запланированные
 задачи отменяются (cancelled)
+
+### Поиск процессов по sub_id и алиасам
+
+Миграция `0000000000005-add-lookup-fields` добавляет в ProcessesTable nullable `subnamespace TEXT`, `sub_id TEXT` и
+`aliases TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[]`. CHECK-ограничения запрещают пустые скаляры, пустые и NULL-элементы
+`aliases` и `sub_id` без `subnamespace` (ограничение `sub_id_requires_subnamespace`). Индексы: B-tree на `subnamespace`,
+неуникальный B-tree на `(subnamespace, sub_id)`, GIN на `aliases`. Значения, недопустимые для TEXT
+(байт `0x00`, некорректный UTF-8), отклоняются до записи при валидации результата процессора.
+
+Поиск выполняется двумя запросами в одной транзакции `REPEATABLE READ READ ONLY`, поэтому атрибуты и истории
+всех совпадений относятся к одному снимку БД, а число запросов не зависит от числа совпадений:
+
+```sql
+SELECT * FROM ProcessesTable WHERE subnamespace = $1 AND sub_id = $2;
+-- или
+SELECT * FROM ProcessesTable WHERE aliases @> ARRAY[$1]::text[];
+
+-- полная история всех найденных процессов
+SELECT * FROM EventsTable WHERE process_id = ANY($1) ORDER BY process_id, event_id ASC;
+```

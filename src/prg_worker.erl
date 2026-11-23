@@ -610,6 +610,11 @@ update_process_from_intent(Process, ProcessUpdates, Intent) ->
                 {Proc#{metadata => Meta}, Updates#{metadata => Meta}};
             (aux_state, AuxState, {Proc, Updates}) ->
                 {Proc#{aux_state => AuxState}, Updates#{aux_state => AuxState}};
+            %% lookup fields are validated by prg_worker_sidecar
+            (Key, undefined, {Proc, Updates}) when Key =:= subnamespace; Key =:= sub_id ->
+                {maps:remove(Key, Proc), Updates#{Key => undefined}};
+            (Key, Value, {Proc, Updates}) when Key =:= subnamespace; Key =:= sub_id; Key =:= aliases ->
+                {Proc#{Key => Value}, Updates#{Key => Value}};
             (_K, _V, Acc) ->
                 Acc
         end,

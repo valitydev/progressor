@@ -5,6 +5,8 @@
 -define(TASK_REPEAT_REQUEST_TIMEOUT, 1000).
 -define(PREPARING_KEY, progressor_request_preparing_duration_ms).
 -define(GETTING_KEY, progressor_get_duration_ms).
+-define(GETTING_BY_SUB_ID_KEY, progressor_get_by_sub_id_duration_ms).
+-define(GETTING_BY_ALIAS_KEY, progressor_get_by_alias_duration_ms).
 
 %% Public API
 -export([init/1]).
@@ -12,6 +14,8 @@
 -export([repair/1]).
 -export([simple_repair/1]).
 -export([get/1]).
+-export([get_by_sub_id/3]).
+-export([get_by_alias/2]).
 -export([put/1]).
 -export([trace/1]).
 -export([health_check/1]).
@@ -103,6 +107,42 @@ get(Req0) ->
         ],
         Req
     ).
+
+%% Returns all processes with given (subnamespace, sub_id) pair, each with full history.
+%% Always reads storage directly (bypassing cache), result order is undefined.
+-spec get_by_sub_id(namespace_id(), binary(), binary()) -> {ok, [process()]} | {error, _Reason}.
+get_by_sub_id(NsId, Subnamespace, SubId) when is_atom(NsId) ->
+    case prg_utils:valid_identifier(Subnamespace) andalso prg_utils:valid_identifier(SubId) of
+        true ->
+            lookup(
+                ?FUNCTION_NAME,
+                ?GETTING_BY_SUB_ID_KEY,
+                NsId,
+                fun(StorageOpts) -> prg_storage:get_by_sub_id(StorageOpts, NsId, Subnamespace, SubId) end
+            );
+        false ->
+            {error, invalid_lookup_arguments}
+    end;
+get_by_sub_id(_NsId, _Subnamespace, _SubId) ->
+    {error, invalid_lookup_arguments}.
+
+%% Returns all processes having given alias, each with full history.
+%% Always reads storage directly (bypassing cache), result order is undefined.
+-spec get_by_alias(namespace_id(), binary()) -> {ok, [process()]} | {error, _Reason}.
+get_by_alias(NsId, Alias) when is_atom(NsId) ->
+    case prg_utils:valid_identifier(Alias) of
+        true ->
+            lookup(
+                ?FUNCTION_NAME,
+                ?GETTING_BY_ALIAS_KEY,
+                NsId,
+                fun(StorageOpts) -> prg_storage:get_by_alias(StorageOpts, NsId, Alias) end
+            );
+        false ->
+            {error, invalid_lookup_arguments}
+    end;
+get_by_alias(_NsId, _Alias) ->
+    {error, invalid_lookup_arguments}.
 
 -spec put(request()) -> {ok, _Result} | {error, _Reason}.
 put(Req) ->
@@ -310,6 +350,23 @@ do_get(Name, #{ns_opts := #{storage := StorageOpts}, id := Id, ns := NsId, range
         ?GETTING_KEY,
         [erlang:atom_to_binary(NsId, utf8)],
         #{name => atom_to_binary(Name), kind => client}
+    ).
+
+%% lookup values are not used as metric labels or span attributes (unbounded cardinality)
+lookup(Name, MetricKey, NsId, Fun) ->
+    prg_utils:pipe(
+        [
+            fun add_ns_opts/1,
+            fun(#{ns_opts := #{storage := StorageOpts}}) ->
+                prg_utils:with_observe(
+                    fun() -> Fun(StorageOpts) end,
+                    MetricKey,
+                    [erlang:atom_to_binary(NsId, utf8)],
+                    #{name => atom_to_binary(Name), kind => client}
+                )
+            end
+        ],
+        #{ns => NsId}
     ).
 
 -define(EVENTS_KEYS, [event_id, event_timestamp, event_metadata, event_payload]).
