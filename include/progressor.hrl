@@ -7,6 +7,9 @@
     status,
     detail,
     aux_state,
+    subnamespace,
+    sub_id,
+    aliases,
     metadata,
     corrupted_by,
     previous_status,
@@ -18,11 +21,16 @@
     status := process_status(),
     detail => binary(),
     aux_state => binary(),
+    subnamespace => binary(),
+    sub_id => binary(),
+    %% not returned from cache (see prg_pg_cache)
+    aliases => [binary()],
     metadata => map(),
     history => [event()],
     corrupted_by => task_id(),
     range => history_range(),
-    last_event_id => event_id(),
+    %% 0 if process has no events
+    last_event_id => non_neg_integer(),
     initialization => task_id(),
     previous_status => process_status(),
     status_changed_at => timestamp_us()
@@ -160,6 +168,11 @@
 
 -type processor_intent() :: #{
     events := [event()],
+    %% lookup fields: absent key = keep, undefined = clear (scalars only),
+    %% list = replace aliases ([] clears)
+    subnamespace => binary() | undefined,
+    sub_id => binary() | undefined,
+    aliases => [binary()],
     %% отсутствие ключа = idle
     action => action(),
     response => term(),

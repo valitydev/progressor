@@ -11,6 +11,7 @@
 -export([with_observe/4]).
 -export([with_observe/5]).
 -export([with_span/2]).
+-export([valid_identifier/1]).
 
 %% Time conversion
 -export([detect_unit/1]).
@@ -57,6 +58,22 @@ make_ns_opts(NsId, NsOpts) ->
     ConfigDefaults = application:get_env(progressor, defaults, #{}),
     Defaults = maps:merge(PresetDefaults, ConfigDefaults),
     maps:merge(Defaults, NsOpts).
+
+%% Checks that the value can be stored in a PostgreSQL TEXT column as is:
+%% a nonempty binary without NUL bytes and with valid UTF-8.
+%% The value is never normalized or modified.
+-spec valid_identifier(term()) -> boolean().
+valid_identifier(Value) when is_binary(Value), byte_size(Value) > 0 ->
+    binary:match(Value, <<0>>) =:= nomatch andalso is_utf8(Value);
+valid_identifier(_Value) ->
+    false.
+
+is_utf8(Value) ->
+    try unicode:characters_to_binary(Value) of
+        Result -> is_binary(Result)
+    catch
+        _:_ -> false
+    end.
 
 -spec unixtime_to_datetime(timestamp_sec()) -> calendar:datetime().
 unixtime_to_datetime(TimestampSec) ->

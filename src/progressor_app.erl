@@ -58,6 +58,20 @@ create_metrics() ->
         {labels, [prg_namespace]}
     ]),
 
+    _ = prometheus_histogram:declare([
+        {name, progressor_get_by_sub_id_duration_ms},
+        {help, "Processes lookup by sub_id durations in millisecond"},
+        {buckets, [50, 150, 300, 500, 750, 1000]},
+        {labels, [prg_namespace]}
+    ]),
+
+    _ = prometheus_histogram:declare([
+        {name, progressor_get_by_alias_duration_ms},
+        {help, "Processes lookup by alias durations in millisecond"},
+        {buckets, [50, 150, 300, 500, 750, 1000]},
+        {labels, [prg_namespace]}
+    ]),
+
     _ = prometheus_counter:declare([
         {name, progressor_cache_hit_counter},
         {help, "Process reading (get) from cache"},

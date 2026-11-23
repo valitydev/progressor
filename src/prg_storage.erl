@@ -12,6 +12,8 @@
 -export([put_process_data/4]).
 -export([process_trace/3]).
 -export([repair_process/3]).
+-export([get_by_sub_id/4]).
+-export([get_by_alias/3]).
 
 %% scan functions
 -export([search_timers/4]).
@@ -88,6 +90,15 @@ prepare_repair(#{client := Handler, options := HandlerOpts}, NsId, ProcessId, Re
 -spec repair_process(storage_opts(), namespace_id(), id()) -> ok | no_return().
 repair_process(#{client := Handler, options := HandlerOpts}, NsId, ProcessId) ->
     Handler:repair_process(HandlerOpts, NsId, ProcessId).
+
+-spec get_by_sub_id(storage_opts(), namespace_id(), binary(), binary()) ->
+    {ok, [process()]} | {error, _Reason}.
+get_by_sub_id(#{client := Handler, options := HandlerOpts}, NsId, Subnamespace, SubId) ->
+    Handler:get_by_sub_id(HandlerOpts, NsId, Subnamespace, SubId).
+
+-spec get_by_alias(storage_opts(), namespace_id(), binary()) -> {ok, [process()]} | {error, _Reason}.
+get_by_alias(#{client := Handler, options := HandlerOpts}, NsId, Alias) ->
+    Handler:get_by_alias(HandlerOpts, NsId, Alias).
 
 %%%%%%%%%%%%%%%%%
 %% Scan functions
